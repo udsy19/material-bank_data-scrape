@@ -12,7 +12,8 @@ from material_bank.fetch import FetchResult
 
 
 def _host(url: str) -> str:
-    return (urlparse(url).netloc or "").split(":")[0].lower().lstrip("www.")
+    h = (urlparse(url).netloc or "").split("@")[-1].split(":")[0].lower()
+    return h[4:] if h.startswith("www.") else h
 
 
 class FakeFetcher:

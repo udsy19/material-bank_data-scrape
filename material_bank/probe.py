@@ -279,21 +279,37 @@ def _detect_ambiguity(landing_html: str, result: ProbeResult) -> None:
         result.probe_status = ProbeStatus.AMBIGUOUS
 
 
+def _fetch_landing(domain: str, fetcher: Fetcher, result: ProbeResult):
+    """Fetch the landing page, falling back to www. Many India sites serve only
+    on www (bare domain has a cert/SNI issue or times out)."""
+    hosts = [domain] if domain.startswith("www.") else [domain, f"www.{domain}"]
+    resp = None
+    for host in hosts:
+        resp = fetcher.get(f"https://{host}/")
+        if not resp.error:
+            if host != domain:
+                result.note("landing", "www-fallback", host=host)
+            return host, resp
+    return domain, resp  # all failed; carries the last error
+
+
 def classify(domain: str, fetcher: Fetcher) -> ProbeResult:
     result = ProbeResult(domain=domain)
-    base = _base_url(domain)
 
-    # 1. Landing.
-    landing = fetcher.get(base)
-    if landing.error:
+    # 1. Landing (with www fallback).
+    base_host, landing = _fetch_landing(domain, fetcher, result)
+    base = _base_url(base_host)
+    if landing is None or landing.error:
         result.probe_status = ProbeStatus.UNREACHABLE
-        result.note("landing", "unreachable", error=landing.error)
+        result.note("landing", "unreachable", error=landing.error if landing else "no response")
         result.probed_at = now_iso()
         return result
     result.http_status = landing.status_code
     if landing.redirected_host:
         result.final_host = landing.redirected_host
         result.note("landing", "redirected", final_host=landing.redirected_host)
+    elif base_host != domain:
+        result.final_host = base_host  # we had to switch to www
     if landing.status_code in (401, 403) or landing.status_code == 429:
         result.probe_status = ProbeStatus.BLOCKED
         result.note("landing", "blocked", status=landing.status_code)

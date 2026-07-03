@@ -30,7 +30,8 @@ DEFAULT_RAW_DIR = Path(__file__).resolve().parent.parent / "raw" / "probe"
 
 
 def _host(url: str) -> str:
-    return (urlparse(url).netloc or "").split(":")[0].lower().lstrip("www.")
+    h = (urlparse(url).netloc or "").split("@")[-1].split(":")[0].lower()
+    return h[4:] if h.startswith("www.") else h  # strip the prefix, not the charset
 
 
 @dataclass
@@ -132,7 +133,12 @@ class Fetcher:
                     timeout=self.timeout,
                 )
             except Exception as exc:  # curl_cffi raises a family of errors
+                # Transient (DNS blip / timeout / reset) under concurrency must
+                # not be recorded as a terminal "unreachable" — retry with backoff.
                 result.error = f"{type(exc).__name__}: {exc}"
+                if attempt < self.max_retries:
+                    self._sleep(self.backoff_base * (2 ** attempt))
+                    continue
                 return result
 
             status = getattr(resp, "status_code", None)
@@ -146,6 +152,7 @@ class Fetcher:
 
             content = getattr(resp, "content", b"") or b""
             final_url = getattr(resp, "url", url) or url
+            result.error = None  # a prior attempt may have set it; this one succeeded
             result.status_code = status
             result.final_url = final_url
             result.final_host = _host(final_url)
