@@ -102,7 +102,7 @@ def test_v2_creates_products_table(tmp_path):
     for col in ("brand", "sku", "category", "price_unit", "coverage_sqft_per_box",
                 "size_mm", "finish", "provenance", "missing"):
         assert col in cols
-    assert db_mod.get_schema_version(c) == 2
+    assert db_mod.get_schema_version(c) == db_mod.SCHEMA_VERSION
     c.close()
 
 
@@ -116,8 +116,9 @@ def test_v1_db_upgrades_to_v2_without_losing_suppliers(tmp_path):
     c.execute("INSERT INTO suppliers(brand, domain) VALUES ('Orientbell', 'orientbell.com')")
     c.commit()
 
-    db_mod.migrate(c)  # upgrade
-    assert db_mod.get_schema_version(c) == 2
+    db_mod.migrate(c)  # upgrade v1 -> latest
+    assert db_mod.get_schema_version(c) == db_mod.SCHEMA_VERSION
     assert c.execute("SELECT COUNT(*) FROM products").fetchone()[0] == 0  # table exists
+    assert c.execute("SELECT COUNT(*) FROM price_observation").fetchone()[0] == 0  # v3 table exists
     assert c.execute("SELECT brand FROM suppliers WHERE domain='orientbell.com'").fetchone()[0] == "Orientbell"
     c.close()

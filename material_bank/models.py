@@ -141,6 +141,32 @@ class NormalizedProduct(BaseModel):
         return self
 
 
+class PriceBasis(str, Enum):
+    """Provenance of a price — MRP is labelled MRP, never 'cost' (CLAUDE.md)."""
+
+    LISTED_MRP = "listed_mrp"
+    DEALER_QUOTE = "dealer_quote"
+    ESTIMATED_BAND = "estimated_band"
+
+
+class PriceObservation(BaseModel):
+    """A price is an observation with a basis + timestamp, not an attribute."""
+
+    source: str = ""
+    price_inr: float
+    price_unit: PriceUnit | None = None
+    basis: PriceBasis
+    observed_at: str
+    source_url: str = ""
+
+    @field_validator("price_inr")
+    @classmethod
+    def _price_positive(cls, v: float) -> float:
+        if v <= 0:
+            raise ValueError("price_inr must be > 0 (a 0/placeholder price is not an observation)")
+        return v
+
+
 class Supplier(BaseModel):
     """A seed registry row — pre-probe. Carries no probe facts by design."""
 

@@ -11,14 +11,15 @@ the sole verifier, and re-running the seed must never clobber probe results.
 from __future__ import annotations
 
 import csv
+import json
 import sqlite3
 from datetime import datetime, timezone
 from pathlib import Path
 from urllib.parse import urlparse
 
-from .models import Supplier
+from .models import NormalizedProduct, PriceObservation, Supplier
 
-SCHEMA_VERSION = 2
+SCHEMA_VERSION = 3
 
 _REPO_ROOT = Path(__file__).resolve().parent.parent
 DEFAULT_DB_PATH = _REPO_ROOT / "data" / "catalog.db"
@@ -124,9 +125,38 @@ def connect(db_path: Path | str = DEFAULT_DB_PATH) -> sqlite3.Connection:
 
 # Ordered, idempotent migrations. Each runs once; its version is stamped so a
 # v1 catalog.db upgrades to v2 without losing data.
+# Prices are observations, never product attributes (CLAUDE.md). Append-only:
+# a changed price is a new row; identical re-observation is ignored.
+_PRICE_OBSERVATION_DDL = """
+CREATE TABLE IF NOT EXISTS price_observation (
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    product_id  INTEGER NOT NULL REFERENCES products(id),
+    source      TEXT,                 -- domain the price came from
+    price_inr   REAL NOT NULL,
+    price_unit  TEXT,
+    basis       TEXT NOT NULL,        -- listed_mrp | dealer_quote | estimated_band
+    observed_at TEXT NOT NULL,
+    source_url  TEXT,
+    UNIQUE(product_id, source_url, price_inr, basis)
+);
+"""
+
+# Records that fail schema/parse — never silently dropped, never silently kept.
+_QUARANTINE_DDL = """
+CREATE TABLE IF NOT EXISTS quarantine (
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    stage       TEXT,
+    source_url  TEXT,
+    reason      TEXT,
+    raw_ref     TEXT,                 -- sha256 of the raw payload, if captured
+    created_at  TEXT
+);
+"""
+
 _MIGRATIONS = (
     (1, _SUPPLIERS_DDL, "initial: suppliers registry + probe fields"),
     (2, _PRODUCTS_DDL, "products spec schema: surface units + per-field provenance"),
+    (3, _PRICE_OBSERVATION_DDL + _QUARANTINE_DDL, "price_observation (observations) + quarantine"),
 )
 
 
@@ -137,7 +167,7 @@ def migrate(conn: sqlite3.Connection) -> None:
     for version, ddl, description in _MIGRATIONS:
         if version in applied:
             continue
-        conn.execute(ddl)
+        conn.executescript(ddl)  # ddl may contain multiple statements
         conn.execute(
             "INSERT INTO schema_version(version, applied_at, description) VALUES (?, ?, ?)",
             (version, now_iso(), description),
@@ -235,6 +265,62 @@ def load_seed(
             # collision: keep the (higher-precedence) existing row, graft the hint
             existing.notes = f"{existing.notes} {supplier.notes}".strip()
     return list(merged.values())
+
+
+def upsert_product(conn: sqlite3.Connection, product: NormalizedProduct,
+                   supplier_domain: str = "") -> int:
+    """Insert/update a product on (brand, sku); returns its product_id."""
+    prov = json.dumps({k: v.model_dump() for k, v in product.provenance.items()})
+    missing = json.dumps(product.missing)
+    ts = now_iso()
+    conn.execute(
+        """
+        INSERT INTO products (supplier_domain, brand, sku, title, category, size_mm,
+            finish, price_unit, coverage_sqft_per_box, provenance, missing,
+            created_at, updated_at)
+        VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)
+        ON CONFLICT(brand, sku) DO UPDATE SET
+            supplier_domain=excluded.supplier_domain, title=excluded.title,
+            category=excluded.category, size_mm=excluded.size_mm, finish=excluded.finish,
+            price_unit=excluded.price_unit, coverage_sqft_per_box=excluded.coverage_sqft_per_box,
+            provenance=excluded.provenance, missing=excluded.missing, updated_at=excluded.updated_at
+        """,
+        (supplier_domain, product.brand, product.sku, product.title, product.category,
+         product.size_mm, product.finish,
+         product.price_unit.value if product.price_unit else None,
+         product.coverage_sqft_per_box, prov, missing, ts, ts),
+    )
+    row = conn.execute(
+        "SELECT id FROM products WHERE brand=? AND sku=?", (product.brand, product.sku)
+    ).fetchone()
+    conn.commit()
+    return row["id"]
+
+
+def add_price_observation(conn: sqlite3.Connection, product_id: int,
+                          obs: PriceObservation) -> None:
+    """Append a price observation (idempotent: identical re-observation ignored)."""
+    conn.execute(
+        """
+        INSERT OR IGNORE INTO price_observation
+            (product_id, source, price_inr, price_unit, basis, observed_at, source_url)
+        VALUES (?,?,?,?,?,?,?)
+        """,
+        (product_id, obs.source, obs.price_inr,
+         obs.price_unit.value if obs.price_unit else None,
+         obs.basis.value, obs.observed_at, obs.source_url),
+    )
+    conn.commit()
+
+
+def quarantine(conn: sqlite3.Connection, *, stage: str, source_url: str,
+               reason: str, raw_ref: str | None = None) -> None:
+    conn.execute(
+        "INSERT INTO quarantine (stage, source_url, reason, raw_ref, created_at) "
+        "VALUES (?,?,?,?,?)",
+        (stage, source_url, reason, raw_ref, now_iso()),
+    )
+    conn.commit()
 
 
 def seed(conn: sqlite3.Connection, suppliers: list[Supplier] | None = None) -> int:
