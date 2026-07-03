@@ -40,6 +40,17 @@ def test_non_product_page_returns_none():
     assert ob.parse_pdp("<html><body>About Us</body></html>", "https://x/about-us") is None
 
 
+def test_vendor_test_placeholder_skipped():
+    # Orientbell leaves live test SKUs like "Test33"; must not enter the catalog.
+    html = (
+        '<script type="application/ld+json">'
+        '{"@type":"Product","brand":"Orientbell","name":"Test33",'
+        '"offers":{"@type":"Offer","price":"2","priceCurrency":"INR","itemOffered":"/sqft"}}'
+        '</script><div data-sku="TEST-33"></div>'
+    )
+    assert ob.parse_pdp(html, "https://www.orientbell.com/test33") is None
+
+
 def test_pdp_candidate_filter():
     assert ob.is_pdp_candidate("https://www.orientbell.com/ohg-emperador-marble-strips-hl")
     assert not ob.is_pdp_candidate("https://www.orientbell.com/tiles/wall-tiles")

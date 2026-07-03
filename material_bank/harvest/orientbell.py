@@ -42,6 +42,7 @@ _SIZE_IMG_RE = re.compile(r'(\d+x\d+)_mm')
 # inner content and clean it rather than trying to skip comments inline.
 _FINISH_RE = re.compile(r'>\s*Finish\s*</span>\s*<a[^>]*>(.*?)</a>', re.S)
 _TAG_OR_COMMENT_RE = re.compile(r'<!--.*?-->|<[^>]+>', re.S)
+_PLACEHOLDER_RE = re.compile(r"^test\s*\d*$", re.I)  # Orientbell leaves "Test33" test SKUs live
 _UNIT_MAP = {
     "/sqft": PriceUnit.PER_SQFT, "/sq ft": PriceUnit.PER_SQFT,
     "/piece": PriceUnit.PER_PIECE, "/pc": PriceUnit.PER_PIECE,
@@ -102,6 +103,10 @@ def parse_pdp(html: str, url: str) -> tuple[NormalizedProduct, PriceObservation 
     if isinstance(offers, list):
         offers = offers[0] if offers else {}
 
+    title = (p.get("name") or "").strip()
+    if _PLACEHOLDER_RE.match(title):
+        return None  # vendor test/placeholder SKU (e.g. "Test33"), not a real product
+
     sku = _extract_sku(html)
     if not sku:
         return None  # cannot key a product without a SKU
@@ -124,7 +129,7 @@ def parse_pdp(html: str, url: str) -> tuple[NormalizedProduct, PriceObservation 
     product = NormalizedProduct(
         brand=(p.get("brand") or "Orientbell"),
         sku=sku,
-        title=(p.get("name") or "").strip(),
+        title=title,
         category=CATEGORY,
         size_mm=size_mm,
         finish=finish,
