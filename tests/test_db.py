@@ -49,10 +49,12 @@ def test_migrate_creates_all_columns(conn):
 
 
 def test_schema_version_stamped_once(conn):
-    assert get_schema_version(conn) == SCHEMA_VERSION
-    migrate(conn)  # re-run
-    rows = conn.execute("SELECT COUNT(*) AS n FROM schema_version").fetchone()["n"]
-    assert rows == 1  # not duplicated
+    assert get_schema_version(conn) == SCHEMA_VERSION  # latest = MAX(version)
+    before = conn.execute("SELECT COUNT(*) AS n FROM schema_version").fetchone()["n"]
+    assert before == SCHEMA_VERSION  # one row per applied migration (v1, v2)
+    migrate(conn)  # re-run must not re-apply
+    after = conn.execute("SELECT COUNT(*) AS n FROM schema_version").fetchone()["n"]
+    assert after == before  # no duplicate stamps
 
 
 def test_seed_probe_columns_default_null(conn):

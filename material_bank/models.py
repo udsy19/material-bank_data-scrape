@@ -13,7 +13,7 @@ from __future__ import annotations
 from enum import Enum
 from typing import Any
 
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field, field_validator, model_validator
 
 
 class ScrapeTier(str, Enum):
@@ -70,6 +70,75 @@ class ProbeResult(BaseModel):
         if detail:
             entry.update(detail)
         self.log.append(entry)
+
+
+class PriceUnit(str, Enum):
+    """The unit a surface price is quoted in (BOM math depends on it)."""
+
+    PER_SQFT = "per_sqft"
+    PER_BOX = "per_box"
+    PER_PIECE = "per_piece"
+    PER_LITRE = "per_litre"
+
+
+# Categories where units are mandatory (matched as substrings against the
+# pipe-delimited categories string). See CLAUDE.md "Surfaces need units".
+SURFACE_MARKERS = ("tile", "paint", "laminate", "floor", "veneer")
+# What every surface SKU must carry — as a value (with provenance) or an
+# explicit entry in ``missing``. Never ingest a surface without these.
+REQUIRED_SURFACE_FIELDS = ("price_unit", "coverage_sqft_per_box", "size_mm", "finish")
+
+
+def is_surface(category: str) -> bool:
+    c = (category or "").lower()
+    return any(m in c for m in SURFACE_MARKERS)
+
+
+class FieldProvenance(BaseModel):
+    """Per-attribute honesty record: where a value came from and how sure."""
+
+    confidence: float = 1.0
+    source: str = ""                    # url / api / derived
+    basis: str = "observed"             # observed | derived_proxy | estimated
+
+
+class NormalizedProduct(BaseModel):
+    """Stage-3 normalized spec (no price — prices are observations, Stage 7).
+
+    Enforces the surface-units rule structurally: a tile/paint/laminate/floor/
+    veneer SKU must carry price_unit + coverage_sqft_per_box + size_mm + finish,
+    or list each genuinely-absent one in ``missing``.
+    """
+
+    brand: str
+    sku: str
+    title: str = ""
+    category: str = ""
+    size_mm: str | None = None
+    finish: str | None = None
+    price_unit: PriceUnit | None = None
+    coverage_sqft_per_box: float | None = None
+    # per-field provenance; missing = fields known-absent and honestly flagged
+    provenance: dict[str, FieldProvenance] = Field(default_factory=dict)
+    missing: list[str] = Field(default_factory=list)
+
+    @model_validator(mode="after")
+    def _surfaces_need_units(self) -> "NormalizedProduct":
+        if not is_surface(self.category):
+            return self
+        for f in REQUIRED_SURFACE_FIELDS:
+            present = getattr(self, f, None) is not None
+            if not present and f not in self.missing:
+                raise ValueError(
+                    f"surface SKU {self.brand}/{self.sku}: '{f}' absent and not "
+                    f"flagged in missing[] — surfaces need units (CLAUDE.md)"
+                )
+            if present and f not in self.provenance:
+                raise ValueError(
+                    f"surface SKU {self.brand}/{self.sku}: '{f}' has a value but no "
+                    f"provenance — every attribute needs {{confidence, source, basis}}"
+                )
+        return self
 
 
 class Supplier(BaseModel):

@@ -18,7 +18,7 @@ from urllib.parse import urlparse
 
 from .models import Supplier
 
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
 
 _REPO_ROOT = Path(__file__).resolve().parent.parent
 DEFAULT_DB_PATH = _REPO_ROOT / "data" / "catalog.db"
@@ -63,6 +63,28 @@ CREATE TABLE IF NOT EXISTS schema_version (
 );
 """
 
+# Stage-3 normalized spec (no price — prices are observations, Stage 7).
+# Surface-unit columns + per-field provenance mirror models.NormalizedProduct.
+_PRODUCTS_DDL = """
+CREATE TABLE IF NOT EXISTS products (
+    id                    INTEGER PRIMARY KEY AUTOINCREMENT,
+    supplier_domain       TEXT,
+    brand                 TEXT NOT NULL,
+    sku                   TEXT NOT NULL,
+    title                 TEXT,
+    category              TEXT,
+    size_mm               TEXT,
+    finish                TEXT,
+    price_unit            TEXT,
+    coverage_sqft_per_box REAL,
+    provenance            TEXT,   -- JSON: {field: {confidence, source, basis}}
+    missing               TEXT,   -- JSON: [field, ...] known-absent, flagged
+    created_at            TEXT,
+    updated_at            TEXT,
+    UNIQUE(brand, sku)            -- Stage-4 exact upsert key
+);
+"""
+
 # Seed identity columns updated on conflict — deliberately excludes every probe
 # and harvest column so a re-seed preserves probe work.
 _SEED_COLUMNS = ("brand", "domain", "categories", "domain_confidence", "status", "notes")
@@ -100,15 +122,25 @@ def connect(db_path: Path | str = DEFAULT_DB_PATH) -> sqlite3.Connection:
     return conn
 
 
+# Ordered, idempotent migrations. Each runs once; its version is stamped so a
+# v1 catalog.db upgrades to v2 without losing data.
+_MIGRATIONS = (
+    (1, _SUPPLIERS_DDL, "initial: suppliers registry + probe fields"),
+    (2, _PRODUCTS_DDL, "products spec schema: surface units + per-field provenance"),
+)
+
+
 def migrate(conn: sqlite3.Connection) -> None:
-    """Create tables and stamp the schema version (idempotent)."""
+    """Apply pending migrations incrementally and stamp each (idempotent)."""
     conn.execute(_SCHEMA_VERSION_DDL)
-    conn.execute(_SUPPLIERS_DDL)
-    row = conn.execute("SELECT MAX(version) AS v FROM schema_version").fetchone()
-    if row is None or row["v"] is None:
+    applied = {r["version"] for r in conn.execute("SELECT version FROM schema_version")}
+    for version, ddl, description in _MIGRATIONS:
+        if version in applied:
+            continue
+        conn.execute(ddl)
         conn.execute(
             "INSERT INTO schema_version(version, applied_at, description) VALUES (?, ?, ?)",
-            (SCHEMA_VERSION, now_iso(), "initial: suppliers registry + probe fields"),
+            (version, now_iso(), description),
         )
     conn.commit()
 
