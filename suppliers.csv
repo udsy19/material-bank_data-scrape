@@ -1,0 +1,91 @@
+brand,domain,categories,price_published,scrape_tier,domain_confidence,status,notes
+Orientbell,orientbell.com,tiles,yes,unknown,verified,active,"Per-product MRP/sqft live-verified 2026-07-02; own visualiser (TriaLook); priced tile anchor"
+Kajaria,kajariaceramics.com,tiles,unknown,unknown,high,active,"India's largest tile brand; corporate catalog site, prices likely dealer-only"
+Somany,somanyceramics.com,tiles,unknown,unknown,high,active,"Catalog site; prices likely dealer-only"
+H&R Johnson,hrjohnsonindia.com,tiles|sanitaryware,unknown,unknown,high,active,"Prism Johnson group; also bath"
+Nitco,nitco.in,tiles|marble|mosaic,unknown,unknown,medium,active,
+Simpolo,simpolo.net,tiles|sanitaryware,unknown,unknown,medium,active,"Domain needs probe verification"
+Varmora,varmora.com,tiles|sanitaryware,unknown,unknown,medium,active,
+Asian Granito (AGL),aglasiangranito.com,tiles|quartz|sanitaryware,unknown,unknown,medium,active,
+RAK Ceramics India,rakceramics.com,tiles|sanitaryware,unknown,unknown,medium,active,"India subsection of global site; probe India path"
+Qutone,qutone.com,tiles,unknown,unknown,medium,active,
+Sunhearrt,sunhearrt.com,tiles,unknown,unknown,low,active,"Verify domain before probe"
+Jaquar,jaquar.com,bath_fittings|sanitaryware|lighting,unknown,unknown,high,active,"Also owns Artize (premium)"
+Cera,cera-india.com,sanitaryware|bath_fittings|tiles,unknown,unknown,high,active,
+Hindware,hindwarehomes.com,sanitaryware|bath_fittings,unknown,unknown,medium,active,
+Parryware,parryware.in,sanitaryware|bath_fittings,unknown,unknown,high,active,
+Kohler India,kohler.co.in,sanitaryware|bath_fittings,unknown,unknown,medium,active,
+Roca India,roca.in,sanitaryware|bath_fittings,unknown,unknown,low,active,"May be in.roca.com — verify"
+Grohe India,grohe.in,bath_fittings,unknown,unknown,low,active,"Verify domain"
+Essco,esscobathware.com,sanitaryware|bath_fittings,unknown,unknown,low,active,"Jaquar value brand; verify domain"
+Asian Paints,asianpaints.com,paint|wallpaper|textures,likely,unknown,high,active,"MRP generally listed per pack; Nilaya wallpaper under same domain"
+Berger Paints,bergerpaints.com,paint|textures,unknown,unknown,high,active,
+Kansai Nerolac,nerolac.com,paint,unknown,unknown,high,active,
+Dulux (AkzoNobel),dulux.in,paint,unknown,unknown,medium,active,
+Indigo Paints,indigopaints.com,paint,unknown,unknown,high,active,
+Birla Opus,birlaopus.com,paint,unknown,unknown,medium,active,"New entrant (Aditya Birla)"
+JSW Paints,jswpaints.in,paint,unknown,unknown,medium,active,
+Giffywalls,giffywalls.com,wallpaper|murals,yes,0,verified,active,"Shopify; already harvested in DSource; skip ₹0 sample variants"
+Marshalls,marshallswallcoverings.com,wallpaper,yes,unknown,verified,active,"Already harvested in DSource"
+Wallmantra,wallmantra.com,wallpaper|wall_decor,likely,unknown,medium,active,"D2C; likely Shopify — probe"
+Life n Colors,lifencolors.in,wallpaper,unknown,unknown,low,active,"Verify domain"
+Greenlam,greenlam.com,laminates|veneers,unknown,unknown,high,active,
+Merino,merinolaminates.com,laminates|solid_surface,unknown,unknown,medium,active,
+CenturyPly,centuryply.com,plywood|laminates|veneers|doors,unknown,unknown,high,active,
+Greenply,greenply.com,plywood|mdf|doors,unknown,unknown,high,active,
+Royale Touche,royaletouche.com,laminates|wood_flooring,unknown,unknown,medium,active,
+Stylam,stylam.com,laminates|solid_surface,unknown,unknown,medium,active,
+Duroply,duroply.in,plywood|veneers,unknown,unknown,medium,active,
+Archidply,archidply.com,plywood|laminates,unknown,unknown,low,active,"Verify domain"
+Natural Veneers,naturalveneers.com,veneers,unknown,unknown,medium,active,
+Welspun Flooring,welspunflooring.com,flooring_vinyl|carpet_tiles|wood_flooring,unknown,unknown,medium,active,
+Squarefoot,squarefoot.co.in,wood_flooring|flooring_vinyl,unknown,unknown,medium,active,
+Span Floors,spanfloors.com,wood_flooring|decking,unknown,unknown,medium,active,
+Pergo India,pergo.in,wood_flooring|laminate_flooring,unknown,unknown,low,active,"Verify India domain"
+Wonderfloor,wonderfloor.com,flooring_vinyl,unknown,unknown,low,active,"Verify domain"
+Obeetee,obeetee.com,rugs|carpets,yes,0,verified,active,"Shopify; already harvested (₹12.6k–283.5k)"
+Imperial Knots,imperialknots.com,rugs,yes,0,verified,active,"Shopify; already harvested"
+Jaipur Rugs,jaipurrugs.com,rugs|carpets,likely,unknown,high,active,"D2C e-commerce"
+D'Decor,ddecor.com,fabrics|curtains|rugs|wallpaper,unknown,unknown,high,active,
+Spaces (Welspun),spaces.in,soft_furnishing|bed_bath,likely,unknown,medium,active,
+Havells,havells.com,lighting|fans|switches|wires,likely,unknown,high,active,"MRP generally listed"
+Orient Electric,orientelectric.com,lighting|fans,likely,unknown,high,active,
+Philips Lighting (Signify),lighting.philips.co.in,lighting,unknown,unknown,medium,active,"Verify catalog path"
+Wipro Lighting,wiprolighting.com,lighting,unknown,unknown,medium,active,"B2B-leaning"
+White Teak,whiteteakcompany.com,lighting|decorative_lighting,yes,unknown,medium,active,"D2C"
+Purple Turtles,purpleturtles.com,lighting|decor,yes,0,verified,active,"Already harvested"
+Oorjaa,oorjaa.in,lighting,yes,0,verified,active,"Already harvested; handmade"
+The Decor Kart,thedecorkart.com,lighting|decor,yes,0,verified,active,"Already harvested"
+Fos Lighting,foslighting.com,lighting,likely,unknown,low,active,"Verify domain"
+Jainsons Emporio,jainsonsemporio.com,lighting|decorative_lighting,likely,unknown,medium,active,
+Hafele India,hafeleindia.com,hardware|kitchen_fittings|appliances|lighting,unknown,unknown,medium,active,
+Hettich India,hettich.com,hardware|kitchen_fittings,unknown,unknown,low,active,"Global domain; find India catalog path — verify"
+Ebco,ebco.in,hardware|kitchen_fittings,unknown,unknown,high,active,
+Dorset,dorsetindia.com,hardware|door_hardware|locks,unknown,unknown,medium,active,
+Ozone,ozone-india.com,hardware|glass_fittings|locks,unknown,unknown,medium,active,
+Nilkamal,nilkamalfurniture.com,furniture|storage,yes,0,verified,active,"Shopify; 250 SKUs already harvested"
+Godrej Interio,godrejinterio.com,furniture|office_furniture|mattresses,likely,unknown,high,active,
+Urban Ladder,urbanladder.com,furniture|decor,yes,unknown,high,active,"D2C e-commerce"
+Wakefit,wakefit.co,furniture|mattresses,yes,unknown,high,active,"D2C e-commerce"
+Pepperfry,pepperfry.com,furniture|decor|lighting,yes,unknown,high,active,"MARKETPLACE — multi-brand; treat as reseller price source, dedupe against brands"
+Durian,durian.in,furniture|office_furniture,likely,unknown,medium,active,
+Featherlite,featherlitefurniture.com,office_furniture,unknown,unknown,medium,active,
+IKEA India,ikea.com,furniture|decor|lighting|textiles,yes,unknown,high,active,"India path /in/en; global-brand SKUs"
+Kalinga Stone,kalingastone.com,quartz|marble_engineered,unknown,unknown,medium,active,"Classic Marble Company brand"
+Quantra,quantra.in,quartz,unknown,unknown,medium,active,
+Classic Marble Company,classicmarble.com,marble|quartz|solid_surface,unknown,unknown,medium,active,
+Saint-Gobain India,saint-gobain.co.in,glass|gypsum|ceilings,unknown,unknown,medium,active,"Glass mostly quote-only B2B"
+AIS Glass,aisglass.com,glass,unknown,unknown,medium,active,"B2B; quote-only likely"
+Gyproc,gyproc.in,ceilings|gypsum|plaster,unknown,unknown,medium,active,"Saint-Gobain brand"
+Knauf India,knauf.co.in,ceilings|gypsum,unknown,unknown,low,active,"Ex-USG Boral; verify domain"
+Armstrong Ceilings India,armstrongceilings.com,ceilings,unknown,unknown,low,active,"Verify India path"
+Pidilite,pidilite.com,adhesives|waterproofing|construction_chemicals,unknown,unknown,high,active,"Fevicol/Dr.Fixit; mostly spec-only"
+MYK Laticrete,myklaticrete.com,tile_adhesives|grouts,unknown,unknown,medium,active,"Critical for tile BOM completeness"
+Sika India,ind.sika.com,construction_chemicals|waterproofing,unknown,unknown,medium,active,
+Legrand India,legrand.co.in,switches|electrical,unknown,unknown,medium,active,
+Anchor by Panasonic,anchor-world.com,switches|electrical|lighting,unknown,unknown,low,active,"Verify domain"
+GM Modular,gmmodular.com,switches|electrical,unknown,unknown,medium,active,
+Schneider Electric India,se.com,switches|electrical,unknown,unknown,medium,active,"India path /in; B2B-leaning"
+Norisys,norisys.com,switches,unknown,unknown,low,active,"Verify domain"
+Astral Pipes,astralpipes.com,plumbing|pipes,unknown,unknown,medium,active,"BOM-relevant, not visual"
+Sleek (Asian Paints),sleekworld.com,modular_kitchen,unknown,unknown,medium,active,"Kitchens largely quote-only"

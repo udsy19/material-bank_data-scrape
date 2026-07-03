@@ -1,0 +1,22 @@
+[project]
+name = "material-bank"
+version = "0.1.0"
+description = "DSource AI — registry-driven Indian architectural-material harvest pipeline (Stage 0/1: registry + probe)"
+requires-python = ">=3.11"
+dependencies = [
+    "curl_cffi>=0.7",
+    "pydantic>=2",
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=8"]
+
+[project.scripts]
+mb-probe = "material_bank.cli:main"
+
+[tool.setuptools.packages.find]
+include = ["material_bank*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-q"
