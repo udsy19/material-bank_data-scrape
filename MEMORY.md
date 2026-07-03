@@ -30,8 +30,10 @@ The registry-driven, self-maintaining harvest pipeline that gets **all major Ind
 - ⬜ `.env` not set — not needed for the deterministic probe (no LLM calls). Needed later for enrichment/dedupe/repair slots. **Paste FULL ANTHROPIC_API_KEY** (old repo 401 = truncated key).
 - ⬜ 13 ambiguous rows await the probe-adjudicator subagent (LLM slot #1); 13 unreachable need manual domain correction (several have working alternates already in-registry, e.g. marshallswallcoverings.com→marshallsindia.com, purpleturtles.com→thepurpleturtles.com).
 - ✅ **Build order step 2 done:** `NormalizedProduct` (per-field provenance + explicit `missing[]`; surface-units validator enforces price_unit+coverage+size_mm+finish for tile/paint/laminate/floor/veneer), `PriceUnit` enum, `bom.boxes_for_area` (ceil area×(1+10%)/coverage, epsilon-guarded against float over-order). `catalog.db` migrated to **schema_version 2** (products table, UNIQUE(brand,sku)); 175 suppliers intact. 71 tests green.
-- ⬜ **Next: build order step 3 — Orientbell harvest → normalize → embed → verify.** Awaiting go/no-go (first network-heavy harvest phase). Then step 4 (tile specs-only), step 5 (price_observation).
-- ⬜ Deferred: probe-adjudicator subagent for 13 ambiguous + 13 unreachable (domain fixes). Not blocking Orientbell.
+- 🔄 **Build order step 3 IN PROGRESS — Orientbell harvest.** schema_version **3** (price_observation append-only + quarantine). `harvest/orientbell.py` parses Magento PDPs: price/unit/brand/title from Product ld+json, sku via `data-sku`, size via magento `"size"`, finish via Finish anchor; **coverage_sqft_per_box honestly flagged missing (not on PDP)**. MRP → `price_observation` basis=`listed_mrp` (never products). Validated live: 15 PDPs → ₹62–169/sqft per_sqft. **Full run (~4374 PDP candidates, resumable, 2s/domain ~2.4h) launched in background.** 79 tests green.
+  - Sitemap `ositemap.xml` = urlset 4928 (4374 single-segment PDP candidates + info pages skipped via no-Product-ld+json). PDP price_unit always per_sqft; coverage never published → BOM needs coverage backfill (dealer sheets) later.
+- ⬜ **Embeddings deferred** (marqo-ecommerce-B → sqlite-vec): the "embed → verify in material swap" tail of step 3. Needs model download + `.env`; separate follow-on, not started.
+- ⬜ Deferred: probe-adjudicator subagent for 13 ambiguous + 13 unreachable (domain fixes). Not blocking.
 
 ## Real vs synthetic (honesty ledger)
 
