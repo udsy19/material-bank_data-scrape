@@ -14,7 +14,7 @@ import sqlite3
 from .. import db
 from ..fetch import Fetcher
 from ..models import PriceBasis, PriceObservation
-from .common import build_product
+from .common import build_product, is_placeholder_title
 
 PER_PAGE = 250
 MAX_PAGES = 400  # safety bound (~100k products)
@@ -36,6 +36,8 @@ def _variant_products(product: dict, *, brand: str, category: str, source: str):
     if images and isinstance(images[0], dict):
         prod_img = images[0].get("src")
     title = (product.get("title") or "").strip()
+    if is_placeholder_title(title):
+        return  # vendor demo product ("Example product"), not a real SKU
 
     for v in product.get("variants") or []:
         try:

@@ -2,9 +2,20 @@
 
 from __future__ import annotations
 
+import re
+
 from ..models import FieldProvenance, NormalizedProduct, PriceUnit
 
 _SURFACE_FIELDS = ("price_unit", "coverage_sqft_per_box", "size_mm", "finish")
+
+# Whole-title match (anchored) so real products like "Test Tube Planter" survive
+# while vendor demo SKUs ("Test33", "Example product", "Sample") are dropped.
+_PLACEHOLDER_RE = re.compile(
+    r"^(test\s*\d*|example\s*product|sample\s*product|untitled|demo)$", re.I)
+
+
+def is_placeholder_title(title: str | None) -> bool:
+    return bool(_PLACEHOLDER_RE.match((title or "").strip()))
 
 
 def build_product(

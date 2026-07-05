@@ -12,7 +12,7 @@ import sqlite3
 from .. import db
 from ..fetch import Fetcher
 from ..models import PriceBasis, PriceObservation
-from .common import build_product
+from .common import build_product, is_placeholder_title
 from .shopify import working_base
 
 PER_PAGE = 100
@@ -80,6 +80,8 @@ def harvest_woo(
         for prod in products:
             if not isinstance(prod, dict):
                 continue
+            if is_placeholder_title(prod.get("name")):
+                continue  # vendor demo product, not a real SKU
             sku = (prod.get("sku") or "").strip() or f"woo-{prod.get('id')}"
             images = prod.get("images") or []
             img = images[0].get("src") if images and isinstance(images[0], dict) else None

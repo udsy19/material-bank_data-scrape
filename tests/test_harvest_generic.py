@@ -8,7 +8,7 @@ import pytest
 
 from material_bank import db as db_mod
 from material_bank.fetch import FetchResult
-from material_bank.harvest.common import build_product
+from material_bank.harvest.common import build_product, is_placeholder_title
 from material_bank.harvest.run import harvest_registry
 from material_bank.harvest.shopify import harvest_shopify
 from material_bank.harvest.woocommerce import _price_inr, harvest_woo
@@ -31,6 +31,24 @@ def test_build_product_non_surface_needs_no_units():
     p = build_product(brand="Nilkamal", sku="1", title="Chair", category="furniture",
                       source="x", price_unit=None)
     assert p.missing == [] and p.category == "furniture"
+
+
+def test_placeholder_filter_is_anchored():
+    # demo/junk dropped...
+    assert is_placeholder_title("Test33") and is_placeholder_title("test")
+    assert is_placeholder_title("Example product") and is_placeholder_title("Sample Product")
+    # ...but real products containing those words survive
+    assert not is_placeholder_title("Test Tube Planter | Set of 2")
+    assert not is_placeholder_title("Example Living Room Rug")
+    assert not is_placeholder_title("Sample Sale Marble Tile")
+
+
+def test_shopify_skips_placeholder_product(conn):
+    products = [{"title": "Example product", "handle": "ex", "images": [],
+                 "variants": [{"id": 1, "sku": "EX", "price": "100", "title": "Default Title"}]}]
+    stats = harvest_shopify(conn, _PagedShopify(products), domain="x.com",
+                            brand="X", categories="furniture")
+    assert stats["products"] == 0  # demo product not stored
 
 
 def test_build_product_surface_flags_missing_units():

@@ -23,7 +23,7 @@ from ..fetch import Fetcher
 from ..models import NormalizedProduct, PriceBasis, PriceObservation, PriceUnit
 from ..probe import _extract_jsonld_products  # reuse the probe's ld+json extractor
 from ..sitemap import parse_sitemap
-from .common import build_product
+from .common import build_product, is_placeholder_title
 
 SOURCE = "orientbell.com"
 DEFAULT_SITEMAP = "https://www.orientbell.com/media/ositemap.xml"
@@ -37,7 +37,6 @@ _SIZE_IMG_RE = re.compile(r'(\d+x\d+)_mm')
 # inner content and clean it rather than trying to skip comments inline.
 _FINISH_RE = re.compile(r'>\s*Finish\s*</span>\s*<a[^>]*>(.*?)</a>', re.S)
 _TAG_OR_COMMENT_RE = re.compile(r'<!--.*?-->|<[^>]+>', re.S)
-_PLACEHOLDER_RE = re.compile(r"^test\s*\d*$", re.I)  # Orientbell leaves "Test33" test SKUs live
 _UNIT_MAP = {
     "/sqft": PriceUnit.PER_SQFT, "/sq ft": PriceUnit.PER_SQFT,
     "/piece": PriceUnit.PER_PIECE, "/pc": PriceUnit.PER_PIECE,
@@ -110,7 +109,7 @@ def parse_pdp(html: str, url: str) -> tuple[NormalizedProduct, PriceObservation 
         offers = offers[0] if offers else {}
 
     title = (p.get("name") or "").strip()
-    if _PLACEHOLDER_RE.match(title):
+    if is_placeholder_title(title):
         return None  # vendor test/placeholder SKU (e.g. "Test33"), not a real product
 
     sku = _extract_sku(html)
