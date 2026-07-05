@@ -10,6 +10,16 @@ dependencies = [
 
 [project.optional-dependencies]
 dev = ["pytest>=8"]
+# Local, free, Apache-2.0 embedding stack (marqo-ecommerce-B via open_clip).
+# sqlite-vec is listed but currently unused: stock sqlite3 here can't load
+# extensions — the VectorStore falls back to numpy cosine (see vectorstore.py).
+embeddings = [
+    "open_clip_torch",
+    "transformers",
+    "pillow",
+    "numpy",
+    "sqlite-vec",
+]
 
 [project.scripts]
 mb-probe = "material_bank.cli:main"
