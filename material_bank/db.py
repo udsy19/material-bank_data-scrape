@@ -19,7 +19,7 @@ from urllib.parse import urlparse
 
 from .models import NormalizedProduct, PriceObservation, Supplier
 
-SCHEMA_VERSION = 3
+SCHEMA_VERSION = 4
 
 _REPO_ROOT = Path(__file__).resolve().parent.parent
 DEFAULT_DB_PATH = _REPO_ROOT / "data" / "catalog.db"
@@ -153,10 +153,31 @@ CREATE TABLE IF NOT EXISTS quarantine (
 );
 """
 
+# One in-process vector index inside catalog.db, used three ways (Explore
+# back-match / Specify retrieval / novelty gate). NOTE: the locked stack names
+# sqlite-vec (vec0), but this platform's sqlite3 cannot load extensions and no
+# pysqlite3 wheel exists for it — so vectors are a normalized float32 BLOB and
+# search is numpy cosine (milliseconds at this scale). Kept behind VectorStore
+# so sqlite-vec drops in later on an extension-capable sqlite build.
+_EMBEDDINGS_DDL = """
+CREATE TABLE IF NOT EXISTS embeddings (
+    product_id INTEGER NOT NULL REFERENCES products(id),
+    kind       TEXT NOT NULL,          -- 'text' | 'image' (shared space)
+    model      TEXT NOT NULL,
+    dim        INTEGER NOT NULL,
+    vector     BLOB NOT NULL,          -- float32 little-endian, L2-normalized
+    created_at TEXT,
+    PRIMARY KEY (product_id, kind)
+);
+"""
+
+_PRODUCTS_IMAGE_URL_DDL = "ALTER TABLE products ADD COLUMN image_url TEXT;"
+
 _MIGRATIONS = (
     (1, _SUPPLIERS_DDL, "initial: suppliers registry + probe fields"),
     (2, _PRODUCTS_DDL, "products spec schema: surface units + per-field provenance"),
     (3, _PRICE_OBSERVATION_DDL + _QUARANTINE_DDL, "price_observation (observations) + quarantine"),
+    (4, _PRODUCTS_IMAGE_URL_DDL + _EMBEDDINGS_DDL, "products.image_url + embeddings vector store"),
 )
 
 
