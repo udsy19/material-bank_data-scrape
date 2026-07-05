@@ -93,6 +93,17 @@ def _extract_sku(html: str) -> str | None:
     return m.group(1).strip() if m else None
 
 
+def _extract_image_url(product_jsonld: dict) -> str | None:
+    """First product image from ld+json; prefer a real photo (.jpg) over .webp."""
+    img = product_jsonld.get("image")
+    urls = img if isinstance(img, list) else ([img] if isinstance(img, str) else [])
+    urls = [u for u in urls if isinstance(u, str) and u.startswith("http")]
+    if not urls:
+        return None
+    jpgs = [u for u in urls if u.lower().split("?")[0].endswith((".jpg", ".jpeg", ".png"))]
+    return (jpgs or urls)[0]
+
+
 def parse_pdp(html: str, url: str) -> tuple[NormalizedProduct, PriceObservation | None] | None:
     """Parse one PDP. Returns (product, price_obs|None), or None if not a product."""
     products = _extract_jsonld_products(html)
@@ -135,6 +146,7 @@ def parse_pdp(html: str, url: str) -> tuple[NormalizedProduct, PriceObservation 
         finish=finish,
         price_unit=price_unit,
         coverage_sqft_per_box=None,
+        image_url=_extract_image_url(p),
         provenance=provenance,
         missing=missing,
     )

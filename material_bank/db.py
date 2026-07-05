@@ -297,19 +297,20 @@ def upsert_product(conn: sqlite3.Connection, product: NormalizedProduct,
     conn.execute(
         """
         INSERT INTO products (supplier_domain, brand, sku, title, category, size_mm,
-            finish, price_unit, coverage_sqft_per_box, provenance, missing,
+            finish, price_unit, coverage_sqft_per_box, image_url, provenance, missing,
             created_at, updated_at)
-        VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)
+        VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)
         ON CONFLICT(brand, sku) DO UPDATE SET
             supplier_domain=excluded.supplier_domain, title=excluded.title,
             category=excluded.category, size_mm=excluded.size_mm, finish=excluded.finish,
             price_unit=excluded.price_unit, coverage_sqft_per_box=excluded.coverage_sqft_per_box,
+            image_url=COALESCE(excluded.image_url, products.image_url),
             provenance=excluded.provenance, missing=excluded.missing, updated_at=excluded.updated_at
         """,
         (supplier_domain, product.brand, product.sku, product.title, product.category,
          product.size_mm, product.finish,
          product.price_unit.value if product.price_unit else None,
-         product.coverage_sqft_per_box, prov, missing, ts, ts),
+         product.coverage_sqft_per_box, product.image_url, prov, missing, ts, ts),
     )
     row = conn.execute(
         "SELECT id FROM products WHERE brand=? AND sku=?", (product.brand, product.sku)

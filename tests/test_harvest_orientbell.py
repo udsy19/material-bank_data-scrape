@@ -51,6 +51,19 @@ def test_vendor_test_placeholder_skipped():
     assert ob.parse_pdp(html, "https://www.orientbell.com/test33") is None
 
 
+def test_extract_image_url_prefers_jpg():
+    product, _ = ob.parse_pdp(PDP_HTML, PDP_URL)
+    assert product.image_url is not None
+    assert product.image_url.lower().endswith((".jpg", ".jpeg", ".png"))  # not the .webp
+
+
+def test_extract_image_url_from_jsonld():
+    assert ob._extract_image_url(
+        {"image": ["https://x/a.webp", "https://x/b.jpg"]}) == "https://x/b.jpg"
+    assert ob._extract_image_url({"image": "https://x/only.jpg"}) == "https://x/only.jpg"
+    assert ob._extract_image_url({}) is None
+
+
 def test_pdp_candidate_filter():
     assert ob.is_pdp_candidate("https://www.orientbell.com/ohg-emperador-marble-strips-hl")
     assert not ob.is_pdp_candidate("https://www.orientbell.com/tiles/wall-tiles")
