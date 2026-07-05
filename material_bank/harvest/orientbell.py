@@ -20,15 +20,10 @@ from urllib.parse import urlparse
 
 from .. import db
 from ..fetch import Fetcher
-from ..models import (
-    FieldProvenance,
-    NormalizedProduct,
-    PriceBasis,
-    PriceObservation,
-    PriceUnit,
-)
+from ..models import NormalizedProduct, PriceBasis, PriceObservation, PriceUnit
 from ..probe import _extract_jsonld_products  # reuse the probe's ld+json extractor
 from ..sitemap import parse_sitemap
+from .common import build_product
 
 SOURCE = "orientbell.com"
 DEFAULT_SITEMAP = "https://www.orientbell.com/media/ositemap.xml"
@@ -122,34 +117,21 @@ def parse_pdp(html: str, url: str) -> tuple[NormalizedProduct, PriceObservation 
     if not sku:
         return None  # cannot key a product without a SKU
 
-    price_unit = _extract_price_unit(offers.get("itemOffered"))
-    size_mm = _extract_size(html)
-    finish = _extract_finish(html)
-
-    provenance: dict[str, FieldProvenance] = {}
-    missing: list[str] = []
-    src = FieldProvenance(source=url, basis="observed")
-    for field, value in (("price_unit", price_unit), ("size_mm", size_mm), ("finish", finish)):
-        if value is not None:
-            provenance[field] = src
-        else:
-            missing.append(field)
-    # Coverage is never on the PDP — honest, structural absence.
-    missing.append("coverage_sqft_per_box")
-
-    product = NormalizedProduct(
+    # coverage_sqft_per_box is never on an Orientbell PDP -> build_product flags
+    # it missing (surface category), honestly and structurally.
+    product = build_product(
         brand=(p.get("brand") or "Orientbell"),
         sku=sku,
         title=title,
         category=CATEGORY,
-        size_mm=size_mm,
-        finish=finish,
-        price_unit=price_unit,
-        coverage_sqft_per_box=None,
+        source=url,
         image_url=_extract_image_url(p),
-        provenance=provenance,
-        missing=missing,
+        size_mm=_extract_size(html),
+        finish=_extract_finish(html),
+        price_unit=_extract_price_unit(offers.get("itemOffered")),
+        coverage_sqft_per_box=None,
     )
+    price_unit = product.price_unit
 
     price = offers.get("price")
     obs = None
