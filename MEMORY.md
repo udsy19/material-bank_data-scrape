@@ -37,6 +37,13 @@ The registry-driven, self-maintaining harvest pipeline that gets **all major Ind
   - New deps: torch, open_clip_torch, transformers, sqlite-vec (installed, unused), pillow, numpy. `image_url` now captured on future harvests; existing rows backfilled by the image job re-parsing PDPs.
 - ⬜ Deferred: probe-adjudicator subagent for 13 ambiguous + 13 unreachable (domain fixes). Not blocking.
 
+## Multi-supplier harvest (2026-07-05)
+
+- ✅ **Generic registry-driven harvesters** (`harvest/shopify.py`, `woocommerce.py`, `run.py` driver, `common.build_product`): dispatch by probed `scrape_tier`, new supplier = new row, no per-site code. Orientbell refactored onto `build_product`. `db.connect` now WAL + busy_timeout for concurrent harvest+embed writers.
+- ✅ **35 suppliers harvested (all reachable) → 66,380 products · 77,620 price observations · 96% priced · 62k with image_url · 86 quarantined.** Biggest: giffywalls (~14k, .com/.in auto-deduped via (brand,sku) upsert), imperialknots 8.1k, lifencolors 6.2k, obeetee.in 5.4k, ugaoo 4.7k, marshallsindia 4.4k, orientbell 4.2k, thedecorkart, purpleturtles, crompton, bajaj, spaces, trustbasket, jainsonsemporio, royaletouche.
+- **Honest gaps:** specs-only Woo sites (advancelam laminates 2k, stellarglobal, quantra quartz, indigopaints, astralpipes, vantageindia) store products with **no price** (their Store API omits prices) — flagged, not faked. Shopify observation `price_unit=None` (per-item implicit). Per-variant SKUs (colors/sizes = distinct rows). ₹0 samples skipped.
+- ⬜ **Stage-4 dedupe still owed:** giffywalls .com/.in collapsed by luck of shared SKUs, but cross-brand look-alikes and reseller/brand overlaps (Pepperfry-class) need the real entity-resolution pass.
+
 ## Real vs synthetic (honesty ledger)
 
 - **Verified real (probe-confirmed, 2026-07-02):** 33 domains publish prices; Orientbell per-product MRP/sqft confirmed in live PDP JSON-LD. Tier/robots/sku for all 175 written from live probe, not knowledge.
