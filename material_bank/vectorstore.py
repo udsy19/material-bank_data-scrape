@@ -44,6 +44,7 @@ class NumpyVectorStore:
 
     def __init__(self, conn: sqlite3.Connection) -> None:
         self.conn = conn
+        self._cache: dict[str, tuple[np.ndarray, np.ndarray]] = {}
 
     def upsert(self, product_id: int, kind: str, vector: np.ndarray, model: str) -> None:
         v = normalize(vector)
@@ -58,6 +59,7 @@ class NumpyVectorStore:
             (product_id, kind, model, int(v.shape[0]), to_blob(v), now_iso()),
         )
         self.conn.commit()
+        self._invalidate(kind)
 
     def upsert_many(self, rows: list[tuple[int, np.ndarray]], *, kind: str, model: str) -> int:
         payload = [
@@ -75,9 +77,12 @@ class NumpyVectorStore:
             payload,
         )
         self.conn.commit()
+        self._invalidate(kind)
         return len(payload)
 
     def _load_matrix(self, kind: str) -> tuple[np.ndarray, np.ndarray]:
+        if kind in self._cache:
+            return self._cache[kind]
         ids, vecs = [], []
         for r in self.conn.execute(
             "SELECT product_id, vector FROM embeddings WHERE kind=?", (kind,)
@@ -85,8 +90,19 @@ class NumpyVectorStore:
             ids.append(r[0])
             vecs.append(from_blob(r[1]))
         if not ids:
-            return np.array([], dtype=np.int64), np.zeros((0, 0), dtype=np.float32)
-        return np.array(ids, dtype=np.int64), np.vstack(vecs)
+            result = (np.array([], dtype=np.int64), np.zeros((0, 0), dtype=np.float32))
+        else:
+            result = (np.array(ids, dtype=np.int64), np.vstack(vecs))
+        self._cache[kind] = result
+        return result
+
+    def preload(self, kind: str) -> int:
+        """Warm the in-memory matrix cache (for read-heavy serving)."""
+        ids, _ = self._load_matrix(kind)
+        return int(ids.size)
+
+    def _invalidate(self, kind: str) -> None:
+        self._cache.pop(kind, None)
 
     def search(self, query: np.ndarray, *, kind: str, k: int = 10) -> list[tuple[int, float]]:
         ids, mat = self._load_matrix(kind)

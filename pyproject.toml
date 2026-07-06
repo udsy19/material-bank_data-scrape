@@ -29,4 +29,8 @@ include = ["material_bank*"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
-addopts = "-q"
+addopts = "-q -m 'not browser'"   # browser e2e is opt-in: pytest -m browser
+markers = [
+    "browser: end-to-end Playwright tests needing a live server + model (slow)",
+    "slow: slow tests",
+]
