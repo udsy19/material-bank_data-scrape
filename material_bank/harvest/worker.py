@@ -86,7 +86,7 @@ def _worker(db_path, *, jsonld_limit, min_interval, backoff_base, on_job) -> int
     return processed
 
 
-def run_workers(db_path=None, *, workers: int = 8, jsonld_limit: int | None = 2000,
+def run_workers(db_path=None, *, workers: int = 8, jsonld_limit: int | None = None,
                 min_interval: float = 2.0, backoff_base: int = jobs.BACKOFF_BASE_S,
                 on_job=None) -> dict:
     """Drain the harvest queue with a pool of workers. Requeues stale-running
@@ -116,7 +116,8 @@ def main(argv=None) -> int:
     ap = argparse.ArgumentParser(prog="mb-harvest-queue")
     ap.add_argument("--tiers", default="shopify,woocommerce,jsonld")
     ap.add_argument("--workers", type=int, default=8)
-    ap.add_argument("--jsonld-limit", type=int, default=2000)
+    ap.add_argument("--jsonld-limit", type=int, default=0,
+                    help="max PDPs per jsonld supplier; 0 = unlimited (collect everything)")
     ap.add_argument("--min-interval", type=float, default=2.0)
     ap.add_argument("--exclude", default="ikea.com,lxhausys.com")
     ap.add_argument("--reset", action="store_true", help="re-arm all jobs (fresh cycle)")
@@ -132,6 +133,7 @@ def main(argv=None) -> int:
         return 0
     tiers = tuple(t.strip() for t in args.tiers.split(",") if t.strip())
     exclude = {d.strip() for d in args.exclude.split(",") if d.strip()}
+    jsonld_limit = None if args.jsonld_limit <= 0 else args.jsonld_limit
     n = seed_harvest_jobs(conn, tiers=tiers, exclude=exclude, reset=args.reset)
     print(f"seeded {n} harvest jobs; queue={jobs.counts(conn, STAGE)}", file=sys.stderr)
     conn.close()
@@ -140,7 +142,7 @@ def main(argv=None) -> int:
         p = result.get("products", 0) if isinstance(result, dict) else 0
         print(f"  {target:<24} {status:<8} products={p}", file=sys.stderr, flush=True)
 
-    final = run_workers(args.db, workers=args.workers, jsonld_limit=args.jsonld_limit,
+    final = run_workers(args.db, workers=args.workers, jsonld_limit=jsonld_limit,
                         min_interval=args.min_interval, on_job=prog)
     print(f"\n=== queue final: {final} ===", file=sys.stderr)
     dead = jobs.dead_letters(db.connect(args.db), STAGE)

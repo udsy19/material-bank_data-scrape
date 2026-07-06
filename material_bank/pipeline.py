@@ -31,7 +31,7 @@ def run_pipeline(
     *,
     tiers: tuple[str, ...] = ("shopify", "woocommerce", "jsonld"),
     workers: int = 8,
-    jsonld_limit: int | None = 2000,
+    jsonld_limit: int | None = None,   # uncapped: collect every product
     min_interval: float = 2.0,
     exclude: set[str] | None = None,
     embed: bool = True,
@@ -83,7 +83,7 @@ def main(argv=None) -> int:
     ap = argparse.ArgumentParser(prog="mb-pipeline")
     ap.add_argument("--tiers", default="shopify,woocommerce,jsonld")
     ap.add_argument("--workers", type=int, default=8)
-    ap.add_argument("--jsonld-limit", type=int, default=2000)
+    ap.add_argument("--jsonld-limit", type=int, default=0, help="0 = unlimited")
     ap.add_argument("--no-embed", action="store_true")
     ap.add_argument("--exclude", default="ikea.com,lxhausys.com")
     ap.add_argument("--db", default=str(db.DEFAULT_DB_PATH))
@@ -95,7 +95,7 @@ def main(argv=None) -> int:
 
     rep = run_pipeline(
         args.db, tiers=tuple(t.strip() for t in args.tiers.split(",") if t.strip()),
-        workers=args.workers, jsonld_limit=args.jsonld_limit,
+        workers=args.workers, jsonld_limit=(None if args.jsonld_limit <= 0 else args.jsonld_limit),
         exclude={d.strip() for d in args.exclude.split(",") if d.strip()},
         embed=not args.no_embed, on_job=prog)
     print("\n=== pipeline report ===", file=sys.stderr)

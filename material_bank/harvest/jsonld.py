@@ -25,7 +25,7 @@ _UNIT_MAP = {
     "/box": PriceUnit.PER_BOX, "/litre": PriceUnit.PER_LITRE,
 }
 _PRODUCT_HINTS = ("/product", "/products/", "/p/", "/item", "/shop/", "/buy/")
-MAX_CHILD_SITEMAPS = 25
+MAX_CHILD_SITEMAPS = 1000  # effectively unbounded — enumerate every child sitemap
 
 
 def _slug(url: str) -> str:
