@@ -12,13 +12,15 @@ import sys
 
 from .. import db
 from ..fetch import Fetcher
+from .jsonld import harvest_jsonld
 from .shopify import harvest_shopify
 from .woocommerce import harvest_woo
 
-# tier -> harvester. jsonld/tier3 have bespoke/Playwright paths (e.g. Orientbell).
+# tier -> harvester. tier3 uses the Playwright harvester (run separately).
 DISPATCH = {
     "shopify": harvest_shopify,
     "woocommerce": harvest_woo,
+    "jsonld": harvest_jsonld,
 }
 
 
@@ -31,23 +33,29 @@ def harvest_registry(
     *,
     tiers: tuple[str, ...] = ("shopify", "woocommerce"),
     fetcher_factory=Fetcher,
+    jsonld_limit: int | None = None,
+    exclude_domains: set[str] | None = None,
     on_supplier=None,
 ) -> list[dict]:
+    exclude = exclude_domains or set()
     placeholders = ",".join("?" for _ in tiers)
-    rows = list(conn.execute(
+    rows = [r for r in conn.execute(
         f"SELECT * FROM suppliers WHERE status='active' AND scrape_tier IN ({placeholders}) "
-        f"ORDER BY scrape_tier, domain",
-        tiers,
-    ))
+        f"ORDER BY scrape_tier, domain", tiers) if r["domain"] not in exclude]
     results = []
     for row in rows:
         harvester = DISPATCH[row["scrape_tier"]]
         fetcher = fetcher_factory()
+        kwargs = dict(domain=row["domain"], brand=_registry_brand(row),
+                      categories=row["categories"] or "")
+        if row["scrape_tier"] == "jsonld":  # jsonld needs sitemap/host + a cap
+            kwargs["sitemap_url"] = row["sitemap_url"]
+            kwargs["base_host"] = row["final_host"] or row["domain"]
+            kwargs["limit"] = jsonld_limit
         before = conn.execute("SELECT COUNT(*) FROM products WHERE supplier_domain=?",
                               (row["domain"],)).fetchone()[0]
         try:
-            stats = harvester(conn, fetcher, domain=row["domain"],
-                              brand=_registry_brand(row), categories=row["categories"] or "")
+            stats = harvester(conn, fetcher, **kwargs)
         except Exception as exc:  # one bad supplier must not kill the sweep
             db.quarantine(conn, stage="harvest", source_url=row["domain"],
                           reason=f"harvester crash {type(exc).__name__}: {exc}", raw_ref=None)
