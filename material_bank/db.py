@@ -19,7 +19,7 @@ from urllib.parse import urlparse
 
 from .models import NormalizedProduct, PriceObservation, Supplier
 
-SCHEMA_VERSION = 4
+SCHEMA_VERSION = 5
 
 _REPO_ROOT = Path(__file__).resolve().parent.parent
 DEFAULT_DB_PATH = _REPO_ROOT / "data" / "catalog.db"
@@ -178,12 +178,42 @@ CREATE TABLE IF NOT EXISTS embeddings (
 
 _PRODUCTS_IMAGE_URL_DDL = "ALTER TABLE products ADD COLUMN image_url TEXT;"
 
+# FTS5 keyword index over products, kept in sync with triggers. Hybrid
+# retrieval fuses this (lexical) with the vector index (semantic).
+_FTS_DDL = """
+CREATE VIRTUAL TABLE IF NOT EXISTS products_fts USING fts5(
+    title, brand, category, content='products', content_rowid='id'
+);
+CREATE TRIGGER IF NOT EXISTS products_ai AFTER INSERT ON products BEGIN
+    INSERT INTO products_fts(rowid, title, brand, category)
+    VALUES (new.id, new.title, new.brand, new.category);
+END;
+CREATE TRIGGER IF NOT EXISTS products_ad AFTER DELETE ON products BEGIN
+    INSERT INTO products_fts(products_fts, rowid, title, brand, category)
+    VALUES ('delete', old.id, old.title, old.brand, old.category);
+END;
+CREATE TRIGGER IF NOT EXISTS products_au AFTER UPDATE ON products BEGIN
+    INSERT INTO products_fts(products_fts, rowid, title, brand, category)
+    VALUES ('delete', old.id, old.title, old.brand, old.category);
+    INSERT INTO products_fts(rowid, title, brand, category)
+    VALUES (new.id, new.title, new.brand, new.category);
+END;
+"""
+
 _MIGRATIONS = (
     (1, _SUPPLIERS_DDL, "initial: suppliers registry + probe fields"),
     (2, _PRODUCTS_DDL, "products spec schema: surface units + per-field provenance"),
     (3, _PRICE_OBSERVATION_DDL + _QUARANTINE_DDL, "price_observation (observations) + quarantine"),
     (4, _PRODUCTS_IMAGE_URL_DDL + _EMBEDDINGS_DDL, "products.image_url + embeddings vector store"),
+    (5, _FTS_DDL, "FTS5 keyword index over products (hybrid retrieval)"),
 )
+
+
+def rebuild_fts(conn: sqlite3.Connection) -> int:
+    """Backfill the FTS index from existing products (rows inserted pre-v5)."""
+    conn.execute("INSERT INTO products_fts(products_fts) VALUES('rebuild')")
+    conn.commit()
+    return conn.execute("SELECT COUNT(*) FROM products_fts").fetchone()[0]
 
 
 def migrate(conn: sqlite3.Connection) -> None:
