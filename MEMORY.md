@@ -44,6 +44,22 @@ The registry-driven, self-maintaining harvest pipeline that gets **all major Ind
 - **Honest gaps:** specs-only Woo sites (advancelam laminates 2k, stellarglobal, quantra quartz, indigopaints, astralpipes, vantageindia) store products with **no price** (their Store API omits prices) — flagged, not faked. Shopify observation `price_unit=None` (per-item implicit). Per-variant SKUs (colors/sizes = distinct rows). ₹0 samples skipped.
 - ⬜ **Stage-4 dedupe still owed:** giffywalls .com/.in collapsed by luck of shared SKUs, but cross-brand look-alikes and reseller/brand overlaps (Pepperfry-class) need the real entity-resolution pass.
 
+## Serving + retrieval + UI + tier3 (2026-07-05)
+
+- ✅ **Retrieval (Stage 8):** schema **v5** FTS5 index (trigger-synced) + `retrieval.py` hybrid search = FTS5 keyword ∪ vector semantic → reciprocal-rank fusion → freshest `price_observation` + basis + >90d stale flag. Validated over 66k catalog.
+- ✅ **Serving:** `serve.py` FastAPI (factory-built, testable). `/api/stats`, `/api/match` (hybrid), `/api/product` (detail + observation history + visually-similar via image/text back-match), `/api/image` (concurrent lock-free proxy). Embedder warmed + vectors preloaded (matrix cache) at startup. Run: `uvicorn material_bank.serve:app`.
+- ✅ **Dashboard:** `static/dashboard.html` — coverage tiles + live semantic search, result cards with proxied images + price/basis, product modal (warm-paper/ink/terracotta). **Fixed:** image proxy held the DB lock → serialized card images; now 24/24 load concurrently.
+- ✅ **Browser tested (Playwright/Chromium):** `tests/browser/` — 13/13 e2e checks pass (self-launches uvicorn), screenshots in `reports/screens/`. Fast suite stays offline; browser marked `-m browser`.
+- ✅ **tier3 (build step 4):** `harvest/tier3.py` generic Playwright harvester — render JS PDPs → post-render JSON-LD (auto) or honest specs-only fallback (title+image, specs flagged missing, no invented price). `drop_shared_default_images` guard (nulls default-image heuristic false-positives). Live: 15 Kajaria tiles harvested specs-only, searchable, honestly unpriced.
+- **Deps added:** fastapi, uvicorn, playwright(+chromium), httpx.
+- **Tests: 128 backend (all offline) + 13 browser e2e, all green.** schema_version **5**.
+
+## FINAL system state (2026-07-05)
+
+- **36 suppliers harvested · 66,387 products · 63,577 priced (96%) · 77,612 price observations · 66,387 text vectors · 4,203 image vectors · 34 categories · 108 quarantined.**
+- Full pipeline live end-to-end: **probe → harvest (shopify/woo/jsonld/tier3) → normalize (units+provenance) → price observations → embed (text+image shared space) → FTS5+vector hybrid retrieval → FastAPI serving → browser dashboard**, all deterministic except the 4 LLM slots (none invoked yet).
+- **Still owed (flagged, not done):** Stage-4 entity resolution (cross-brand dedupe); coverage backfill for tile BOM whole-box counts; wallpaper/surface `price_unit` normalization; Stage-6 enrichment; Stage-9 cron/drift/repair loop; the remaining ~90 tier3/jsonld suppliers (Playwright machinery exists, just not run at scale).
+
 ## Real vs synthetic (honesty ledger)
 
 - **Verified real (probe-confirmed, 2026-07-02):** 33 domains publish prices; Orientbell per-product MRP/sqft confirmed in live PDP JSON-LD. Tier/robots/sku for all 175 written from live probe, not knowledge.
