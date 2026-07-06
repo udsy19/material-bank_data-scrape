@@ -133,12 +133,14 @@ def harvest_jsonld(
     sitemap_url = sitemap_url or f"https://{host}/sitemap.xml"
     urls = enumerate_pdp_urls(fetcher, sitemap_url)
     seen = _already(conn, domain)
+    # reachable = the sitemap yielded PDPs, or we've harvested this domain before.
+    reachable = len(urls) > 0 or bool(seen)
     urls = [u for u in urls if _slug(u) not in seen and u not in seen]
     if limit is not None:
         urls = urls[:limit]
 
     stats = {"domain": domain, "candidates": len(urls), "products": 0, "priced": 0,
-             "skipped_non_product": 0, "quarantined": 0}
+             "skipped_non_product": 0, "quarantined": 0, "reachable": reachable}
     for url in urls:
         r = fetcher.get(url)
         if not r.ok:

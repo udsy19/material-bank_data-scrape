@@ -19,7 +19,7 @@ from urllib.parse import urlparse
 
 from .models import NormalizedProduct, PriceObservation, Supplier
 
-SCHEMA_VERSION = 5
+SCHEMA_VERSION = 6
 
 _REPO_ROOT = Path(__file__).resolve().parent.parent
 DEFAULT_DB_PATH = _REPO_ROOT / "data" / "catalog.db"
@@ -200,12 +200,35 @@ CREATE TRIGGER IF NOT EXISTS products_au AFTER UPDATE ON products BEGIN
 END;
 """
 
+# Durable job queue (PIPELINE.md orchestration): one row per (stage, target).
+# Workers claim atomically; failures increment attempts and reschedule with
+# exponential backoff; exhausted jobs dead-letter to status='failed'.
+_PIPELINE_JOBS_DDL = """
+CREATE TABLE IF NOT EXISTS pipeline_jobs (
+    id           INTEGER PRIMARY KEY AUTOINCREMENT,
+    stage        TEXT NOT NULL,
+    target       TEXT NOT NULL,
+    status       TEXT NOT NULL DEFAULT 'pending',  -- pending|running|done|failed
+    attempts     INTEGER NOT NULL DEFAULT 0,
+    max_attempts INTEGER NOT NULL DEFAULT 4,
+    priority     INTEGER NOT NULL DEFAULT 0,
+    last_error   TEXT,
+    result       TEXT,
+    next_run_at  TEXT,
+    created_at   TEXT,
+    updated_at   TEXT,
+    UNIQUE(stage, target)
+);
+CREATE INDEX IF NOT EXISTS idx_jobs_claim ON pipeline_jobs(stage, status, next_run_at);
+"""
+
 _MIGRATIONS = (
     (1, _SUPPLIERS_DDL, "initial: suppliers registry + probe fields"),
     (2, _PRODUCTS_DDL, "products spec schema: surface units + per-field provenance"),
     (3, _PRICE_OBSERVATION_DDL + _QUARANTINE_DDL, "price_observation (observations) + quarantine"),
     (4, _PRODUCTS_IMAGE_URL_DDL + _EMBEDDINGS_DDL, "products.image_url + embeddings vector store"),
     (5, _FTS_DDL, "FTS5 keyword index over products (hybrid retrieval)"),
+    (6, _PIPELINE_JOBS_DDL, "pipeline_jobs durable queue with retry/backoff"),
 )
 
 
