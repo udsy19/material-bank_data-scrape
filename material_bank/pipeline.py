@@ -37,6 +37,7 @@ def run_pipeline(
     embed: bool = True,
     embedder_factory=_default_embedder,
     retry_dead_first: bool = True,
+    reset: bool = False,
     on_job=None,
 ) -> dict:
     db_path = str(db_path or db.DEFAULT_DB_PATH)
@@ -46,7 +47,7 @@ def run_pipeline(
     # Stage 1 — harvest (durable queue). Re-arm prior dead-letters for a retry.
     if retry_dead_first:
         jobs.retry_dead(conn, worker.STAGE)
-    worker.seed_harvest_jobs(conn, tiers=tiers, exclude=exclude or DEFAULT_EXCLUDE)
+    worker.seed_harvest_jobs(conn, tiers=tiers, exclude=exclude or DEFAULT_EXCLUDE, reset=reset)
     harvest_counts = worker.run_workers(
         db_path, workers=workers, jsonld_limit=jsonld_limit,
         min_interval=min_interval, on_job=on_job)
@@ -88,6 +89,7 @@ def main(argv=None) -> int:
     ap.add_argument("--workers", type=int, default=8)
     ap.add_argument("--jsonld-limit", type=int, default=0, help="0 = unlimited")
     ap.add_argument("--no-embed", action="store_true")
+    ap.add_argument("--reset", action="store_true", help="re-arm all jobs (fresh cycle)")
     ap.add_argument("--exclude", default="ikea.com,lxhausys.com")
     ap.add_argument("--db", default=str(db.DEFAULT_DB_PATH))
     args = ap.parse_args(argv)
@@ -100,7 +102,7 @@ def main(argv=None) -> int:
         args.db, tiers=tuple(t.strip() for t in args.tiers.split(",") if t.strip()),
         workers=args.workers, jsonld_limit=(None if args.jsonld_limit <= 0 else args.jsonld_limit),
         exclude={d.strip() for d in args.exclude.split(",") if d.strip()},
-        embed=not args.no_embed, on_job=prog)
+        embed=not args.no_embed, reset=args.reset, on_job=prog)
     print("\n=== pipeline report ===", file=sys.stderr)
     print(json.dumps({k: v for k, v in rep.items() if k != "dead_letters"}, indent=2, default=str),
           file=sys.stderr)
