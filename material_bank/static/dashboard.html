@@ -4,105 +4,243 @@
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1" />
 <title>DSource Material Bank</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,400;9..144,500&family=Inter:wght@400;500;600&display=swap" rel="stylesheet">
 <style>
   :root {
-    --paper: #f4efe4; --paper-2: #efe8d9; --card: #fbf8f1;
-    --ink: #23201b; --ink-soft: #6b6459; --line: #ddd3c1;
-    --terra: #c15f38; --terra-soft: #e7d9cd; --good: #4f7a52;
+    /* Colors */
+    --color-parchment: #fefffc;
+    --color-paper: #ffffff;
+    --color-linen: #f9faf7;
+    --color-ink-black: #171717;
+    --color-graphite: #2c2c2c;
+    --color-charcoal: #444141;
+    --color-ash: #646464;
+    --color-fog: #b4b8b4;
+    --color-mist: #dee2de;
+    --color-twilight: #282834;
+    --color-dusk: #1f1f29;
+    --color-signal-blue: #41a1cf;
+    --color-cerulean: #0081c0;
+
+    /* Typography */
+    --font-serif: "Fraunces", Georgia, "Times New Roman", serif;
+    --font-sans: "Inter", ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+
+    /* Shadows */
+    --shadow-sm: rgba(0, 0, 0, 0.15) 0px 2px 6px 0px;
+    --shadow-subtle: rgba(0, 0, 0, 0.08) 0px 1px 1px 0px, rgba(0, 0, 0, 0.08) 0px 4px 5px 0px;
+    --shadow-sm-2: rgba(0, 0, 0, 0.05) 0px 1px 8px 0px;
+
+    /* Layout */
+    --page-max-width: 1200px;
   }
   * { box-sizing: border-box; }
   body {
-    margin: 0; background: var(--paper); color: var(--ink);
-    font: 15px/1.5 -apple-system, "Segoe UI", Inter, system-ui, sans-serif;
+    margin: 0; background: var(--color-parchment); color: var(--color-charcoal);
+    font-family: var(--font-sans); font-size: 16px; font-weight: 400;
+    line-height: 1.5; letter-spacing: -0.01em;
   }
-  .serif { font-family: "Fraunces", Georgia, "Times New Roman", serif; }
-  header { padding: 28px 24px 8px; max-width: 1160px; margin: 0 auto; }
-  h1 { margin: 0; font-size: 30px; font-weight: 600; letter-spacing: -.5px; }
-  h1 .dot { color: var(--terra); }
-  .sub { color: var(--ink-soft); margin-top: 4px; font-size: 14px; }
-  main { max-width: 1160px; margin: 0 auto; padding: 12px 24px 60px; }
+  .serif { font-family: var(--font-serif); font-weight: 400; font-variant-ligatures: none; }
+  a { color: inherit; }
+  :focus-visible { outline: 2px solid var(--color-signal-blue); outline-offset: 2px; }
 
-  .tiles { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px,1fr)); gap: 12px; margin: 18px 0 8px; }
-  .tile { background: var(--card); border: 1px solid var(--line); border-radius: 12px; padding: 14px 16px; }
-  .tile .n { font-size: 26px; font-weight: 600; letter-spacing: -.5px; }
-  .tile .l { color: var(--ink-soft); font-size: 12px; text-transform: uppercase; letter-spacing: .5px; margin-top: 2px; }
-  .tile .n small { font-size: 14px; color: var(--good); font-weight: 600; }
+  /* Frosted navigation pill */
+  nav {
+    position: fixed; top: 16px; left: 50%; transform: translateX(-50%); z-index: 5;
+    display: flex; align-items: center; gap: 20px; padding: 10px 20px;
+    background: rgba(255, 255, 255, 0.6); backdrop-filter: blur(12px); -webkit-backdrop-filter: blur(12px);
+    border: 1px solid rgba(40, 40, 52, 0.25); border-radius: 50px; box-shadow: var(--shadow-sm);
+    font-size: 15px; font-weight: 500; letter-spacing: -0.15px; line-height: 1; white-space: nowrap;
+  }
+  nav .glyph { display: flex; color: var(--color-twilight); }
+  nav .brand { color: var(--color-twilight); }
+  nav a { color: var(--color-charcoal); text-decoration: none; }
+  nav a:hover { color: var(--color-twilight); }
 
-  .searchbar { display: flex; gap: 10px; margin: 26px 0 6px; }
-  #q { flex: 1; padding: 14px 16px; font-size: 16px; border: 1px solid var(--line);
-       border-radius: 10px; background: var(--card); color: var(--ink); }
-  #q:focus { outline: 2px solid var(--terra); border-color: var(--terra); }
-  button { padding: 0 22px; font-size: 15px; font-weight: 600; cursor: pointer;
-           border: none; border-radius: 10px; background: var(--terra); color: #fff; }
-  button:hover { background: #a94f2c; }
-  .hint { color: var(--ink-soft); font-size: 13px; }
-  .chips { display: flex; flex-wrap: wrap; gap: 8px; margin: 10px 0 4px; }
-  .chip { font-size: 13px; color: var(--terra); background: var(--terra-soft); border: none;
-          padding: 6px 12px; border-radius: 20px; cursor: pointer; }
-  .chip:hover { background: #dcc7b6; }
+  main { max-width: var(--page-max-width); margin: 0 auto; padding: 0 24px 64px; }
 
-  .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(220px,1fr)); gap: 16px; margin-top: 18px; }
-  .card { background: var(--card); border: 1px solid var(--line); border-radius: 12px; overflow: hidden;
-          cursor: pointer; transition: transform .08s, box-shadow .08s; }
-  .card:hover { transform: translateY(-2px); box-shadow: 0 6px 18px rgba(60,45,30,.12); }
-  .card .img { aspect-ratio: 1/1; background: var(--paper-2); display: flex; align-items: center; justify-content: center; }
+  /* Editorial hero */
+  .hero { padding: 128px 0 24px; max-width: 760px; }
+  h1 {
+    margin: 0; font-family: var(--font-serif); font-weight: 400; font-variant-ligatures: none;
+    font-size: clamp(36px, 6vw, 54px); line-height: 1.1; letter-spacing: -0.02em;
+    color: var(--color-graphite);
+  }
+  .lead { margin: 16px 0 0; font-size: 18px; line-height: 1.5; letter-spacing: -0.18px; color: var(--color-ash); }
+
+  /* Coverage tiles — white content cards */
+  .tiles { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 12px; margin: 32px 0 0; }
+  .tile {
+    background: var(--color-paper); border: 1px solid var(--color-mist);
+    border-radius: 12px; padding: 16px; box-shadow: var(--shadow-subtle);
+  }
+  .tile .n {
+    font-size: 27px; line-height: 1.2; letter-spacing: -0.04em; color: var(--color-graphite);
+  }
+  .tile .n small { font-size: 13px; font-family: var(--font-sans); letter-spacing: -0.13px; color: var(--color-ash); }
+  .tile .l { margin-top: 4px; font-size: 13px; line-height: 1.3; letter-spacing: -0.13px; color: var(--color-ash); }
+
+  /* Search — paper-form input + outlined signal-blue action */
+  .searchbar { display: flex; gap: 12px; margin: 48px 0 8px; }
+  #q {
+    flex: 1; padding: 14px 16px; font-family: var(--font-sans); font-size: 16px;
+    letter-spacing: -0.01em; color: var(--color-charcoal);
+    background: var(--color-linen); border: none; border-bottom: 1px solid var(--color-charcoal);
+    border-radius: 0;
+  }
+  #q::placeholder { color: var(--color-fog); }
+  #q:focus { outline: none; background: var(--color-paper); border-bottom-color: var(--color-signal-blue); }
+  #go {
+    display: inline-flex; align-items: center; gap: 8px; padding: 5px 12px; cursor: pointer;
+    font-family: var(--font-sans); font-size: 15px; font-weight: 500; letter-spacing: -0.15px;
+    color: var(--color-signal-blue); background: transparent;
+    border: 1px solid var(--color-signal-blue); border-radius: 8px;
+  }
+  #go .arrow {
+    display: inline-flex; align-items: center; justify-content: center;
+    width: 20px; height: 20px; border: 1px solid var(--color-signal-blue); border-radius: 50%;
+    font-size: 12px; line-height: 1;
+  }
+  #go:hover { background: rgba(65, 161, 207, 0.06); }
+  .hint { font-size: 13px; line-height: 1.3; letter-spacing: -0.13px; color: var(--color-ash); }
+
+  /* Example chips — quiet hairline-bordered actions */
+  .chips { display: flex; flex-wrap: wrap; gap: 8px; margin: 12px 0 4px; }
+  .chip {
+    padding: 5px 12px; cursor: pointer; font-family: var(--font-sans);
+    font-size: 13px; font-weight: 500; letter-spacing: -0.13px; color: var(--color-charcoal);
+    background: transparent; border: 1px solid var(--color-mist); border-radius: 8px;
+  }
+  .chip:hover { border-color: var(--color-twilight); color: var(--color-twilight); }
+
+  /* Section headings — the serif speaks */
+  .results-h, .suppliers h2 {
+    margin: 0; font-family: var(--font-serif); font-weight: 400; font-variant-ligatures: none;
+    font-size: 27px; line-height: 1.5; letter-spacing: -0.04em; color: var(--color-graphite);
+  }
+
+  /* Result cards — white content cards with hairline mist borders */
+  .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: 16px; margin-top: 16px; }
+  .card {
+    background: var(--color-paper); border: 1px solid var(--color-mist); border-radius: 12px;
+    overflow: hidden; cursor: pointer; box-shadow: var(--shadow-subtle);
+    transition: border-color 0.12s ease;
+  }
+  .card:hover { border-color: var(--color-fog); }
+  .card .img { aspect-ratio: 1/1; background: var(--color-linen); display: flex; align-items: center; justify-content: center; }
   .card .img img { width: 100%; height: 100%; object-fit: cover; }
-  .card .img .ph { color: var(--ink-soft); font-size: 12px; }
-  .card .body { padding: 10px 12px 12px; }
-  .card .t { font-weight: 600; font-size: 14px; line-height: 1.3; height: 2.6em; overflow: hidden; }
+  .card .img .ph { font-size: 13px; letter-spacing: -0.13px; color: var(--color-fog); }
+  .card .body { padding: 12px 16px 16px; }
+  .card .t { font-size: 15px; font-weight: 500; letter-spacing: -0.15px; line-height: 1.3; height: 2.6em; overflow: hidden; color: var(--color-charcoal); }
   .card .meta { display: flex; justify-content: space-between; align-items: baseline; margin-top: 8px; }
-  .price { font-weight: 600; }
-  .price .u { font-weight: 400; color: var(--ink-soft); font-size: 12px; }
-  .basis { font-size: 11px; color: var(--ink-soft); }
-  .noprice { color: var(--ink-soft); font-size: 12px; font-style: italic; }
-  .src { font-size: 11px; color: var(--ink-soft); margin-top: 4px; }
-  .stale { color: var(--terra); font-size: 11px; }
+  .price { font-weight: 600; color: var(--color-graphite); }
+  .price .u { font-weight: 400; font-size: 13px; color: var(--color-ash); }
+  .basis { font-size: 13px; line-height: 1.3; letter-spacing: -0.13px; color: var(--color-ash); }
+  .noprice { font-size: 13px; font-style: italic; color: var(--color-ash); }
+  .src { margin-top: 4px; font-size: 13px; line-height: 1.3; letter-spacing: -0.13px; color: var(--color-fog); }
+  .stale { font-size: 13px; color: var(--color-signal-blue); }
+  .empty { padding: 32px 0; text-align: center; color: var(--color-ash); }
 
-  .suppliers { margin-top: 34px; }
-  .suppliers h2, .results-h { font-size: 15px; text-transform: uppercase; letter-spacing: .5px; color: var(--ink-soft); }
-  .slist { display: flex; flex-wrap: wrap; gap: 8px; }
-  .spill { background: var(--card); border: 1px solid var(--line); border-radius: 20px; padding: 6px 12px; font-size: 13px; }
-  .spill b { color: var(--terra); }
+  /* Suppliers — hairline pills */
+  .suppliers { margin-top: 64px; }
+  .slist { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 16px; }
+  .spill {
+    padding: 5px 12px; font-size: 13px; letter-spacing: -0.13px; color: var(--color-charcoal);
+    background: var(--color-paper); border: 1px solid var(--color-mist); border-radius: 8px;
+  }
+  .spill b { font-weight: 600; color: var(--color-graphite); }
 
-  .overlay { position: fixed; inset: 0; background: rgba(30,22,15,.5); display: none; align-items: center;
-             justify-content: center; padding: 20px; z-index: 10; }
+  /* Product detail modal — paper card */
+  .overlay {
+    position: fixed; inset: 0; z-index: 10; display: none; align-items: center; justify-content: center;
+    padding: 20px; background: rgba(23, 23, 23, 0.4);
+  }
   .overlay.on { display: flex; }
-  .modal { background: var(--card); border-radius: 14px; max-width: 720px; width: 100%; max-height: 88vh;
-           overflow: auto; padding: 22px; }
-  .modal .close { float: right; background: none; color: var(--ink-soft); font-size: 22px; padding: 0 6px; }
-  .modal h3 { margin: 4px 0 2px; font-size: 20px; }
-  .obs { width: 100%; border-collapse: collapse; margin-top: 10px; font-size: 13px; }
-  .obs th, .obs td { text-align: left; padding: 6px 8px; border-bottom: 1px solid var(--line); }
-  .simgrid { display: grid; grid-template-columns: repeat(auto-fill, minmax(120px,1fr)); gap: 10px; margin-top: 10px; }
-  .simgrid .card .t { height: auto; font-size: 12px; }
-  .empty { color: var(--ink-soft); padding: 30px 0; text-align: center; }
-  footer { text-align: center; color: var(--ink-soft); font-size: 12px; padding: 20px; }
+  .modal {
+    width: 100%; max-width: 720px; max-height: 88vh; overflow: auto; padding: 24px;
+    background: var(--color-paper); border: 1px solid var(--color-mist); border-radius: 16px;
+    box-shadow: var(--shadow-subtle);
+  }
+  .modal .close {
+    float: right; padding: 0 8px; cursor: pointer; font-size: 22px; line-height: 1;
+    color: var(--color-ash); background: none; border: none; border-radius: 4px;
+  }
+  .modal .close:hover { color: var(--color-twilight); }
+  .modal h3 {
+    margin: 4px 0 2px; font-family: var(--font-serif); font-weight: 400; font-variant-ligatures: none;
+    font-size: 27px; line-height: 1.3; letter-spacing: -0.04em; color: var(--color-graphite);
+  }
+  .modal h2 { margin: 24px 0 0; font-size: 18px; font-weight: 500; letter-spacing: -0.18px; line-height: 1.3; color: var(--color-graphite); }
+  .obs { width: 100%; border-collapse: collapse; margin-top: 8px; font-size: 13px; letter-spacing: -0.13px; }
+  .obs th { font-weight: 500; color: var(--color-ash); }
+  .obs th, .obs td { text-align: left; padding: 8px; border-bottom: 1px solid var(--color-mist); }
+  .simgrid { display: grid; grid-template-columns: repeat(auto-fill, minmax(120px, 1fr)); gap: 12px; margin-top: 8px; }
+  .simgrid .card .t { height: auto; font-size: 13px; }
+
+  /* Footer — the colophon */
+  footer {
+    margin-top: 80px; padding: 64px 24px; background: var(--color-paper);
+    border-top: 1px solid var(--color-mist); text-align: center;
+  }
+  footer .statement {
+    margin: 0 auto; max-width: 640px; font-family: var(--font-serif); font-weight: 400;
+    font-variant-ligatures: none; font-size: 27px; line-height: 1.5; letter-spacing: -0.04em;
+    color: var(--color-graphite);
+  }
+  footer .colophon { margin-top: 16px; font-size: 13px; line-height: 1.3; letter-spacing: -0.13px; color: var(--color-ash); }
+
+  @media (prefers-reduced-motion: reduce) {
+    * { transition: none !important; }
+  }
+  @media (max-width: 640px) {
+    nav { gap: 12px; padding: 8px 16px; font-size: 13px; }
+    .hero { padding-top: 104px; }
+    .searchbar { flex-direction: column; }
+  }
 </style>
 </head>
 <body>
-<header>
-  <h1 class="serif">DSource Material Bank<span class="dot">.</span></h1>
-  <div class="sub">India-first architectural-material catalog — real specs, honest prices, semantic search.</div>
-</header>
+<nav aria-label="primary">
+  <span class="glyph" aria-hidden="true">
+    <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.2">
+      <circle cx="8" cy="6" r="2.6"/><path d="M1 13c2.4-2.8 4.9-4.2 7-4.2S13.6 10.2 15 13"/>
+    </svg>
+  </span>
+  <span class="brand">DSource Material Bank</span>
+  <a href="#q">Search</a>
+  <a href="#suppliers">Suppliers</a>
+</nav>
+
 <main>
+  <section class="hero">
+    <h1>DSource Material Bank</h1>
+    <p class="lead">An India-first catalog of real architectural materials — real specs, honest prices, semantic search. Every price is an observation with a basis; nothing is faked.</p>
+  </section>
+
   <section class="tiles" id="tiles" aria-label="coverage"></section>
 
   <div class="searchbar">
     <input id="q" placeholder="Search 66k products — e.g. “glossy emperador marble tile”, “brass pendant light”, “handwoven jute rug”" autocomplete="off" />
-    <button id="go">Search</button>
+    <button id="go">Search <span class="arrow" aria-hidden="true">→</span></button>
   </div>
   <div class="hint">Hybrid keyword + semantic search over the embedded catalog. Prices are observations with a basis.</div>
   <div class="chips" id="chips"></div>
 
-  <div class="results-h" id="results-h" style="margin-top:22px; display:none;"></div>
+  <div class="results-h" id="results-h" style="margin-top:48px; display:none;"></div>
   <section class="grid" id="results"></section>
-  <div class="empty" id="empty" style="display:none;">No matches.</div>
+  <div class="empty" id="empty" style="display:none;">No matches. Try a broader material, colour, or room word.</div>
 
   <section class="suppliers" id="suppliers"></section>
 </main>
 
 <div class="overlay" id="overlay"><div class="modal" id="modal"></div></div>
-<footer>Deterministic registry-driven pipeline · marqo-ecommerce-B embeddings · prices labelled by basis, never faked.</footer>
+
+<footer>
+  <p class="statement">Real specs. Honest prices. Nothing faked.</p>
+  <div class="colophon">Deterministic registry-driven pipeline · marqo-ecommerce-B embeddings · prices labelled by basis, never faked.</div>
+</footer>
 
 <script>
 const $ = s => document.querySelector(s);
@@ -181,15 +319,15 @@ async function openProduct(id) {
      <div class="body"><div class="t">${escape(s.title)}</div>
      <div class="src">${s.match} ${s.score}</div></div></article>`).join("");
   $("#modal").innerHTML =
-    `<button class="close" onclick="closeModal()">×</button>
-     <h3 class="serif">${escape(p.title||"Untitled")}</h3>
+    `<button class="close" onclick="closeModal()" aria-label="Close">×</button>
+     <h3>${escape(p.title||"Untitled")}</h3>
      <div class="src">${escape(p.brand||"")} · ${escape(p.supplier_domain||"")} · ${escape(p.category||"")}
         ${p.size_mm?"· "+p.size_mm:""} ${p.finish?"· "+p.finish:""}</div>
-     <div style="margin-top:10px">${priceHTML(p.price)}</div>
-     ${p.image_url?`<div class="img" style="max-width:280px;margin-top:12px;border-radius:10px;overflow:hidden"><img src="${img(p.image_url)}" style="width:100%"></div>`:""}
-     <h2 style="margin-top:18px">Price observations</h2>
+     <div style="margin-top:12px">${priceHTML(p.price)}</div>
+     ${p.image_url?`<div class="img" style="max-width:280px;margin-top:16px;border:1px solid var(--color-mist);border-radius:12px;overflow:hidden"><img src="${img(p.image_url)}" style="width:100%;display:block"></div>`:""}
+     <h2>Price observations</h2>
      <table class="obs"><tr><th>Price</th><th>Basis</th><th>Source</th><th>Observed</th></tr>${obs||'<tr><td colspan=4 class="noprice">none</td></tr>'}</table>
-     ${sim?`<h2 style="margin-top:18px">Visually similar</h2><div class="simgrid">${sim}</div>`:""}`;
+     ${sim?`<h2>Visually similar</h2><div class="simgrid">${sim}</div>`:""}`;
   $("#overlay").classList.add("on");
   document.querySelectorAll("#modal .simgrid .card").forEach(c=>c.onclick=()=>openProduct(c.dataset.id));
 }
