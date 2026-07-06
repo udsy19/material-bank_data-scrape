@@ -119,6 +119,7 @@ class NormalizedProduct(BaseModel):
     price_unit: PriceUnit | None = None
     coverage_sqft_per_box: float | None = None
     image_url: str | None = None
+    source_url: str | None = None   # the PDP this came from (exact resume key)
     # per-field provenance; missing = fields known-absent and honestly flagged
     provenance: dict[str, FieldProvenance] = Field(default_factory=dict)
     missing: list[str] = Field(default_factory=list)

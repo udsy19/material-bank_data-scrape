@@ -107,3 +107,18 @@ def test_harvest_jsonld_end_to_end(conn):
                            categories="tiles", sitemap_url="https://s.com/sitemap.xml")
     assert stats["products"] == 2 and stats["priced"] == 1
     assert conn.execute("SELECT COUNT(*) FROM price_observation").fetchone()[0] == 1
+
+
+def test_specs_only_supplier_resumes_by_source_url(conn):
+    """Regression: specs-only PDPs (no price obs) must still resume, not re-fetch.
+    The 'Specs Tile' at /products/b has no price -> only source_url makes it skippable."""
+    f = _SiteFetcher()
+    harvest_jsonld(conn, f, domain="s.com", brand="S", categories="tiles",
+                   sitemap_url="https://s.com/sitemap.xml")
+    # source_url was stored on the specs-only product
+    b = conn.execute("SELECT source_url FROM products WHERE sku='B'").fetchone()
+    assert b["source_url"] == "https://s.com/products/b"
+    # second run skips both (0 new candidates) — no wasteful re-fetch
+    stats2 = harvest_jsonld(conn, f, domain="s.com", brand="S", categories="tiles",
+                            sitemap_url="https://s.com/sitemap.xml")
+    assert stats2["candidates"] == 0 and stats2["reachable"] is True

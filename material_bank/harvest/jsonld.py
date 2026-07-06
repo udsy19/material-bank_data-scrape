@@ -111,10 +111,12 @@ def enumerate_pdp_urls(fetcher: Fetcher, sitemap_url: str) -> list[str]:
 
 
 def _already(conn: sqlite3.Connection, domain: str) -> set[str]:
+    # Exact resume by the product's source_url (works for specs-only too), plus
+    # priced observations' source_url as a fallback for pre-source_url rows.
     return {r[0] for r in conn.execute(
-        "SELECT source_url FROM price_observation WHERE source=?", (domain,))} | \
-           {r[0] for r in conn.execute(
-        "SELECT sku FROM products WHERE supplier_domain=?", (domain,))}
+        "SELECT source_url FROM products WHERE supplier_domain=? AND source_url IS NOT NULL",
+        (domain,))} | {r[0] for r in conn.execute(
+        "SELECT source_url FROM price_observation WHERE source=?", (domain,))}
 
 
 def harvest_jsonld(
@@ -135,7 +137,7 @@ def harvest_jsonld(
     seen = _already(conn, domain)
     # reachable = the sitemap yielded PDPs, or we've harvested this domain before.
     reachable = len(urls) > 0 or bool(seen)
-    urls = [u for u in urls if _slug(u) not in seen and u not in seen]
+    urls = [u for u in urls if u not in seen]  # exact source_url resume
     if limit is not None:
         urls = urls[:limit]
 

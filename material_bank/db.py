@@ -19,7 +19,7 @@ from urllib.parse import urlparse
 
 from .models import NormalizedProduct, PriceObservation, Supplier
 
-SCHEMA_VERSION = 7
+SCHEMA_VERSION = 8
 
 _REPO_ROOT = Path(__file__).resolve().parent.parent
 DEFAULT_DB_PATH = _REPO_ROOT / "data" / "catalog.db"
@@ -244,6 +244,9 @@ _MIGRATIONS = (
     (5, _FTS_DDL, "FTS5 keyword index over products (hybrid retrieval)"),
     (6, _PIPELINE_JOBS_DDL, "pipeline_jobs durable queue with retry/backoff"),
     (7, _HARVEST_HISTORY_DDL, "harvest_history for yield-drift self-healing"),
+    (8, "ALTER TABLE products ADD COLUMN source_url TEXT;"
+        "CREATE INDEX IF NOT EXISTS idx_products_srcurl ON products(supplier_domain, source_url);",
+     "products.source_url — exact resume key for specs-only harvests"),
 )
 
 
@@ -378,20 +381,21 @@ def upsert_product(conn: sqlite3.Connection, product: NormalizedProduct,
     conn.execute(
         """
         INSERT INTO products (supplier_domain, brand, sku, title, category, size_mm,
-            finish, price_unit, coverage_sqft_per_box, image_url, provenance, missing,
-            created_at, updated_at)
-        VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+            finish, price_unit, coverage_sqft_per_box, image_url, source_url, provenance,
+            missing, created_at, updated_at)
+        VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
         ON CONFLICT(brand, sku) DO UPDATE SET
             supplier_domain=excluded.supplier_domain, title=excluded.title,
             category=excluded.category, size_mm=excluded.size_mm, finish=excluded.finish,
             price_unit=excluded.price_unit, coverage_sqft_per_box=excluded.coverage_sqft_per_box,
             image_url=COALESCE(excluded.image_url, products.image_url),
+            source_url=COALESCE(excluded.source_url, products.source_url),
             provenance=excluded.provenance, missing=excluded.missing, updated_at=excluded.updated_at
         """,
         (supplier_domain, product.brand, product.sku, product.title, product.category,
          product.size_mm, product.finish,
          product.price_unit.value if product.price_unit else None,
-         product.coverage_sqft_per_box, product.image_url, prov, missing, ts, ts),
+         product.coverage_sqft_per_box, product.image_url, product.source_url, prov, missing, ts, ts),
     )
     row = conn.execute(
         "SELECT id FROM products WHERE brand=? AND sku=?", (product.brand, product.sku)

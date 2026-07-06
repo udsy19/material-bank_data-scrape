@@ -58,6 +58,6 @@ def build_product(
     return NormalizedProduct(
         brand=brand, sku=sku, title=title, category=category, image_url=image_url,
         size_mm=size_mm, finish=finish, price_unit=price_unit,
-        coverage_sqft_per_box=coverage_sqft_per_box,
+        coverage_sqft_per_box=coverage_sqft_per_box, source_url=source,
         provenance=provenance, missing=missing,
     )
