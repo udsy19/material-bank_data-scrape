@@ -240,6 +240,7 @@
 <footer>
   <p class="statement">Real specs. Honest prices. Nothing faked.</p>
   <div class="colophon">Deterministic registry-driven pipeline · marqo-ecommerce-B embeddings · prices labelled by basis, never faked.</div>
+  <div class="colophon" id="pipeline" style="margin-top:8px"></div>
 </footer>
 
 <script>
@@ -268,6 +269,20 @@ function cardHTML(r) {
     </div></article>`;
 }
 function escape(s){const d=document.createElement("div");d.textContent=s;return d.innerHTML;}
+
+async function loadPipeline() {
+  try {
+    const d = await (await fetch("/api/pipeline")).json();
+    const j = d.jobs || {};
+    const dead = (d.dead_letters || []).length;
+    const parts = [`harvest queue — ${j.done||0} done`, `${j.pending||0} pending`,
+                   `${j.running||0} running`];
+    let txt = parts.join(" · ");
+    if (j.failed) txt += ` · <span style="color:var(--color-cerulean)">${j.failed} failed (retried, then dead-lettered)</span>`;
+    if (dead) txt += ` — ${dead} need attention`;
+    $("#pipeline").innerHTML = txt;
+  } catch (e) { /* pre-queue db */ }
+}
 
 async function loadStats() {
   const s = await (await fetch("/api/stats")).json();
@@ -336,7 +351,7 @@ $("#overlay").onclick = e => { if (e.target.id === "overlay") closeModal(); };
 
 $("#go").onclick = search;
 $("#q").addEventListener("keydown", e => { if (e.key === "Enter") search(); });
-loadStats(); loadChips();
+loadStats(); loadChips(); loadPipeline();
 </script>
 </body>
 </html>

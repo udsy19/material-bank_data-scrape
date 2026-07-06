@@ -91,3 +91,10 @@ def test_image_proxy(client):
 
 def test_image_proxy_rejects_bad_url(client):
     assert client.get("/api/image", params={"url": "file:///etc/passwd"}).status_code == 400
+
+
+def test_pipeline_health_endpoint(client):
+    d = client.get("/api/pipeline").json()
+    assert "jobs" in d and "dead_letters" in d
+    for s in ("pending", "running", "done", "failed"):
+        assert s in d["jobs"]

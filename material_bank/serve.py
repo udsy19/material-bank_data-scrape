@@ -13,7 +13,7 @@ import numpy as np
 from fastapi import FastAPI, HTTPException, Query
 from fastapi.responses import HTMLResponse, Response
 
-from . import db
+from . import db, jobs
 from .retrieval import freshest_price, hybrid_search, stats, top_suppliers
 from .vectorstore import NumpyVectorStore
 
@@ -45,6 +45,17 @@ def create_app(state_provider) -> FastAPI:
         s = S()
         with lock:
             return {**stats(s["conn"]), "top_suppliers": top_suppliers(s["conn"])}
+
+    @app.get("/api/pipeline")
+    def api_pipeline() -> dict:
+        """Harvest-queue health so failures are visible, not buried."""
+        s = S()
+        with lock:
+            try:
+                return {"jobs": jobs.counts(s["conn"], "harvest"),
+                        "dead_letters": jobs.dead_letters(s["conn"], "harvest")}
+            except Exception:
+                return {"jobs": {}, "dead_letters": []}  # pre-v6 db
 
     @app.get("/api/match")
     def api_match(q: str = Query("", min_length=0), k: int = Query(20, ge=1, le=60)) -> dict:

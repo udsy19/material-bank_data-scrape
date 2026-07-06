@@ -60,6 +60,16 @@ The registry-driven, self-maintaining harvest pipeline that gets **all major Ind
 - Full pipeline live end-to-end: **probe → harvest (shopify/woo/jsonld/tier3) → normalize (units+provenance) → price observations → embed (text+image shared space) → FTS5+vector hybrid retrieval → FastAPI serving → browser dashboard**, all deterministic except the 4 LLM slots (none invoked yet).
 - **Still owed (flagged, not done):** Stage-4 entity resolution (cross-brand dedupe); coverage backfill for tile BOM whole-box counts; wallpaper/surface `price_unit` normalization; Stage-6 enrichment; Stage-9 cron/drift/repair loop; the remaining ~90 tier3/jsonld suppliers (Playwright machinery exists, just not run at scale).
 
+## Speed + durability + orchestration (2026-07-06)
+
+- ✅ **Parallel harvest** (`harvest/parallel.py`): the ~1 req/2s budget is PER DOMAIN, so distinct domains harvest concurrently (own Fetcher + own connection, WAL+busy_timeout). ~N× wall-clock; each domain still ≤1 req/2s. Single giant domains stay serial by the rule → capped.
+- ✅ **Durable job queue with retry** (`jobs.py` + schema **v6** `pipeline_jobs`): one row per (stage,target); atomic claim (only one worker wins), exponential-backoff retry, **dead-letter after max_attempts** (last_error kept), `requeue_stale_running` (recover crashed workers), `retry_dead`. **Nothing silently lost.**
+- ✅ **Queue-driven harvest** (`harvest/worker.py`): seed one job/supplier, pool of workers claim+dispatch+report; transient (unreachable) → retried, permanent → dead-lettered. jsonld harvester signals `reachable`.
+- ✅ **End-to-end orchestrator** (`pipeline.py`): harvest (queue+retry) → embed (resumable) → FTS rebuild → health report; idempotent, the loop cron drives (Stage 9).
+- ✅ **Generic JSON-LD harvester** (`harvest/jsonld.py`): generalizes Orientbell (sitemap→PDP→schema.org Product); priced or specs-only, no fabricated price. Runs via queue with per-supplier cap.
+- ✅ **Visibility:** `/api/pipeline` endpoint + dashboard footer line show job counts + dead-letters. Run: `python -m material_bank.pipeline` or `python -m material_bank.harvest.worker`.
+- **Tests: 156 backend + 13 browser e2e (redesigned dashboard), all green.** schema_version **6**.
+
 ## Real vs synthetic (honesty ledger)
 
 - **Verified real (probe-confirmed, 2026-07-02):** 33 domains publish prices; Orientbell per-product MRP/sqft confirmed in live PDP JSON-LD. Tier/robots/sku for all 175 written from live probe, not knowledge.
