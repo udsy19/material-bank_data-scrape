@@ -31,7 +31,6 @@
     /* Shadows */
     --shadow-sm: rgba(0, 0, 0, 0.15) 0px 2px 6px 0px;
     --shadow-subtle: rgba(0, 0, 0, 0.08) 0px 1px 1px 0px, rgba(0, 0, 0, 0.08) 0px 4px 5px 0px;
-    --shadow-sm-2: rgba(0, 0, 0, 0.05) 0px 1px 8px 0px;
 
     /* Layout */
     --page-max-width: 1200px;
@@ -46,52 +45,64 @@
   a { color: inherit; }
   :focus-visible { outline: 2px solid var(--color-signal-blue); outline-offset: 2px; }
 
-  /* Frosted navigation pill */
-  nav {
-    position: fixed; top: 16px; left: 50%; transform: translateX(-50%); z-index: 5;
+  @keyframes rise { from { opacity: 0; transform: translateY(14px); } to { opacity: 1; transform: none; } }
+  /* transform-only: dynamic content must never sit at opacity 0 (screenshots, slow paints) */
+  @keyframes lift { from { transform: translateY(10px); } to { transform: none; } }
+
+  /* ── Dusk hero — the one atmospheric surface ─────────────────── */
+  .hero {
+    position: relative; overflow: hidden; margin: 12px; padding: 112px 24px 56px;
+    background: var(--color-dusk); border-radius: 24px; text-align: center;
+  }
+  .hero::before {
+    content: ""; position: absolute; inset: 0; pointer-events: none;
+    background:
+      radial-gradient(58% 44% at 50% -6%, rgba(0, 129, 192, 0.32), transparent 70%),
+      radial-gradient(34% 30% at 82% 8%, rgba(65, 161, 207, 0.12), transparent 70%);
+  }
+  .hero > * { position: relative; }
+  .hero h1 {
+    margin: 0 auto; max-width: 720px;
+    font-family: var(--font-serif); font-weight: 400; font-variant-ligatures: none;
+    font-size: clamp(40px, 6vw, 64px); line-height: 1.1; letter-spacing: -0.02em;
+    color: var(--color-parchment);
+    animation: rise 0.6s cubic-bezier(0.2, 0.7, 0.3, 1) both;
+  }
+  .lead {
+    margin: 16px auto 0; max-width: 560px; font-size: 16px; line-height: 1.5;
+    letter-spacing: -0.01em; color: var(--color-fog);
+    animation: rise 0.6s cubic-bezier(0.2, 0.7, 0.3, 1) 0.08s both;
+  }
+
+  /* Frosted navigation pill — .hero-scoped so it wins over `.hero > *` */
+  .hero nav {
+    position: absolute; top: 20px; left: 50%; transform: translateX(-50%); z-index: 2;
     display: flex; align-items: center; gap: 20px; padding: 10px 20px;
-    background: rgba(255, 255, 255, 0.6); backdrop-filter: blur(12px); -webkit-backdrop-filter: blur(12px);
-    border: 1px solid rgba(40, 40, 52, 0.25); border-radius: 50px; box-shadow: var(--shadow-sm);
+    background: rgba(255, 255, 255, 0.06); backdrop-filter: blur(16px); -webkit-backdrop-filter: blur(16px);
+    border: 1px solid rgba(255, 255, 255, 0.22); border-radius: 50px;
     font-size: 15px; font-weight: 500; letter-spacing: -0.15px; line-height: 1; white-space: nowrap;
   }
-  nav .glyph { display: flex; color: var(--color-twilight); }
-  nav .brand { color: var(--color-twilight); }
-  nav a { color: var(--color-charcoal); text-decoration: none; }
-  nav a:hover { color: var(--color-twilight); }
+  nav .glyph { display: flex; color: var(--color-parchment); }
+  nav .brand { color: var(--color-parchment); }
+  nav a { color: var(--color-mist); text-decoration: none; }
+  nav a:hover { color: var(--color-parchment); }
 
-  main { max-width: var(--page-max-width); margin: 0 auto; padding: 0 24px 64px; }
-
-  /* Editorial hero */
-  .hero { padding: 128px 0 24px; max-width: 760px; }
-  h1 {
-    margin: 0; font-family: var(--font-serif); font-weight: 400; font-variant-ligatures: none;
-    font-size: clamp(36px, 6vw, 54px); line-height: 1.1; letter-spacing: -0.02em;
-    color: var(--color-graphite);
+  /* Frosted search overlay card — the centrepiece */
+  .glass {
+    margin: 40px auto 0; max-width: 720px; padding: 20px; text-align: left;
+    background: rgba(255, 255, 255, 0.07); backdrop-filter: blur(16px); -webkit-backdrop-filter: blur(16px);
+    border: 1px solid rgba(255, 255, 255, 0.16); border-radius: 16px;
+    animation: rise 0.6s cubic-bezier(0.2, 0.7, 0.3, 1) 0.16s both;
   }
-  .lead { margin: 16px 0 0; font-size: 18px; line-height: 1.5; letter-spacing: -0.18px; color: var(--color-ash); }
-
-  /* Coverage tiles — white content cards */
-  .tiles { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 12px; margin: 32px 0 0; }
-  .tile {
-    background: var(--color-paper); border: 1px solid var(--color-mist);
-    border-radius: 12px; padding: 16px; box-shadow: var(--shadow-subtle);
-  }
-  .tile .n {
-    font-size: 27px; line-height: 1.2; letter-spacing: -0.04em; color: var(--color-graphite);
-  }
-  .tile .n small { font-size: 13px; font-family: var(--font-sans); letter-spacing: -0.13px; color: var(--color-ash); }
-  .tile .l { margin-top: 4px; font-size: 13px; line-height: 1.3; letter-spacing: -0.13px; color: var(--color-ash); }
-
-  /* Search — paper-form input + outlined signal-blue action */
-  .searchbar { display: flex; gap: 12px; margin: 48px 0 8px; }
+  .searchbar { display: flex; gap: 12px; }
   #q {
-    flex: 1; padding: 14px 16px; font-family: var(--font-sans); font-size: 16px;
-    letter-spacing: -0.01em; color: var(--color-charcoal);
-    background: var(--color-linen); border: none; border-bottom: 1px solid var(--color-charcoal);
+    flex: 1; min-width: 0; padding: 12px 4px; font-family: var(--font-sans); font-size: 16px;
+    letter-spacing: -0.01em; color: var(--color-parchment);
+    background: transparent; border: none; border-bottom: 1px solid rgba(255, 255, 255, 0.35);
     border-radius: 0;
   }
-  #q::placeholder { color: var(--color-fog); }
-  #q:focus { outline: none; background: var(--color-paper); border-bottom-color: var(--color-signal-blue); }
+  #q::placeholder { color: rgba(222, 226, 222, 0.5); }
+  #q:focus { outline: none; border-bottom-color: var(--color-signal-blue); }
   #go {
     display: inline-flex; align-items: center; gap: 8px; padding: 5px 12px; cursor: pointer;
     font-family: var(--font-sans); font-size: 15px; font-weight: 500; letter-spacing: -0.15px;
@@ -103,17 +114,33 @@
     width: 20px; height: 20px; border: 1px solid var(--color-signal-blue); border-radius: 50%;
     font-size: 12px; line-height: 1;
   }
-  #go:hover { background: rgba(65, 161, 207, 0.06); }
-  .hint { font-size: 13px; line-height: 1.3; letter-spacing: -0.13px; color: var(--color-ash); }
-
-  /* Example chips — quiet hairline-bordered actions */
-  .chips { display: flex; flex-wrap: wrap; gap: 8px; margin: 12px 0 4px; }
+  #go:hover { background: rgba(65, 161, 207, 0.1); }
+  .hint { margin-top: 12px; font-size: 13px; line-height: 1.3; letter-spacing: -0.13px; color: var(--color-fog); }
+  .chips { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 12px; }
   .chip {
     padding: 5px 12px; cursor: pointer; font-family: var(--font-sans);
-    font-size: 13px; font-weight: 500; letter-spacing: -0.13px; color: var(--color-charcoal);
-    background: transparent; border: 1px solid var(--color-mist); border-radius: 8px;
+    font-size: 13px; font-weight: 500; letter-spacing: -0.13px; color: var(--color-mist);
+    background: transparent; border: 1px solid rgba(255, 255, 255, 0.22); border-radius: 8px;
   }
-  .chip:hover { border-color: var(--color-twilight); color: var(--color-twilight); }
+  .chip:hover { border-color: var(--color-signal-blue); color: var(--color-parchment); }
+
+  main { max-width: var(--page-max-width); margin: 0 auto; padding: 0 24px 64px; }
+
+  /* Coverage — hairline-divided editorial strip, no boxes */
+  .tiles {
+    display: grid; grid-template-columns: repeat(auto-fit, minmax(130px, 1fr));
+    gap: 16px 0; margin: 48px 0 0; padding: 24px 0;
+    border-top: 1px solid var(--color-mist); border-bottom: 1px solid var(--color-mist);
+  }
+  .tile { padding: 0 20px; border-left: 1px solid var(--color-mist); animation: rise 0.5s cubic-bezier(0.2, 0.7, 0.3, 1) both; }
+  .tile:first-child { border-left: none; padding-left: 0; }
+  .tile:nth-child(2) { animation-delay: 0.04s; } .tile:nth-child(3) { animation-delay: 0.08s; }
+  .tile:nth-child(4) { animation-delay: 0.12s; } .tile:nth-child(5) { animation-delay: 0.16s; }
+  .tile:nth-child(6) { animation-delay: 0.2s; }  .tile:nth-child(7) { animation-delay: 0.24s; }
+  .tile:nth-child(8) { animation-delay: 0.28s; }
+  .tile .n { font-size: 27px; line-height: 1.2; letter-spacing: -0.04em; color: var(--color-graphite); }
+  .tile .n small { font-size: 13px; font-family: var(--font-sans); letter-spacing: -0.13px; color: var(--color-ash); }
+  .tile .l { margin-top: 2px; font-size: 13px; line-height: 1.3; letter-spacing: -0.13px; color: var(--color-ash); }
 
   /* Section headings — the serif speaks */
   .results-h, .suppliers h2 {
@@ -121,16 +148,17 @@
     font-size: 27px; line-height: 1.5; letter-spacing: -0.04em; color: var(--color-graphite);
   }
 
-  /* Result cards — white content cards with hairline mist borders */
+  /* Result cards — pure hairlines, no shadow */
   .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: 16px; margin-top: 16px; }
   .card {
     background: var(--color-paper); border: 1px solid var(--color-mist); border-radius: 12px;
-    overflow: hidden; cursor: pointer; box-shadow: var(--shadow-subtle);
-    transition: border-color 0.12s ease;
+    overflow: hidden; cursor: pointer; transition: border-color 0.15s ease;
+    animation: lift 0.3s cubic-bezier(0.2, 0.7, 0.3, 1) both;
   }
   .card:hover { border-color: var(--color-fog); }
-  .card .img { aspect-ratio: 1/1; background: var(--color-linen); display: flex; align-items: center; justify-content: center; }
-  .card .img img { width: 100%; height: 100%; object-fit: cover; }
+  .card .img { aspect-ratio: 1/1; background: var(--color-linen); display: flex; align-items: center; justify-content: center; overflow: hidden; }
+  .card .img img { width: 100%; height: 100%; object-fit: cover; transition: transform 0.25s ease; }
+  .card:hover .img img { transform: scale(1.03); }
   .card .img .ph { font-size: 13px; letter-spacing: -0.13px; color: var(--color-fog); }
   .card .body { padding: 12px 16px 16px; }
   .card .t { font-size: 15px; font-weight: 500; letter-spacing: -0.15px; line-height: 1.3; height: 2.6em; overflow: hidden; color: var(--color-charcoal); }
@@ -155,13 +183,14 @@
   /* Product detail modal — paper card */
   .overlay {
     position: fixed; inset: 0; z-index: 10; display: none; align-items: center; justify-content: center;
-    padding: 20px; background: rgba(23, 23, 23, 0.4);
+    padding: 20px; background: rgba(31, 31, 41, 0.5);
+    backdrop-filter: blur(4px); -webkit-backdrop-filter: blur(4px);
   }
   .overlay.on { display: flex; }
   .modal {
     width: 100%; max-width: 720px; max-height: 88vh; overflow: auto; padding: 24px;
     background: var(--color-paper); border: 1px solid var(--color-mist); border-radius: 16px;
-    box-shadow: var(--shadow-subtle);
+    box-shadow: var(--shadow-subtle); animation: rise 0.3s cubic-bezier(0.2, 0.7, 0.3, 1) both;
   }
   .modal .close {
     float: right; padding: 0 8px; cursor: pointer; font-size: 22px; line-height: 1;
@@ -192,41 +221,42 @@
   footer .colophon { margin-top: 16px; font-size: 13px; line-height: 1.3; letter-spacing: -0.13px; color: var(--color-ash); }
 
   @media (prefers-reduced-motion: reduce) {
-    * { transition: none !important; }
+    * { animation: none !important; transition: none !important; }
   }
   @media (max-width: 640px) {
     nav { gap: 12px; padding: 8px 16px; font-size: 13px; }
-    .hero { padding-top: 104px; }
+    .hero { margin: 8px; padding: 96px 16px 32px; }
     .searchbar { flex-direction: column; }
+    .tile { padding: 0 12px; }
   }
 </style>
 </head>
 <body>
-<nav aria-label="primary">
-  <span class="glyph" aria-hidden="true">
-    <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.2">
-      <circle cx="8" cy="6" r="2.6"/><path d="M1 13c2.4-2.8 4.9-4.2 7-4.2S13.6 10.2 15 13"/>
-    </svg>
-  </span>
-  <span class="brand">DSource Material Bank</span>
-  <a href="#q">Search</a>
-  <a href="#suppliers">Suppliers</a>
-</nav>
+<section class="hero">
+  <nav aria-label="primary">
+    <span class="glyph" aria-hidden="true">
+      <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.2">
+        <circle cx="8" cy="6" r="2.6"/><path d="M1 13c2.4-2.8 4.9-4.2 7-4.2S13.6 10.2 15 13"/>
+      </svg>
+    </span>
+    <span class="brand">DSource Material Bank</span>
+    <a href="#q">Search</a>
+    <a href="#suppliers">Suppliers</a>
+  </nav>
+  <h1>Real materials, honest prices.</h1>
+  <p class="lead">Hybrid keyword + semantic search across India's architectural-material catalog. Every price is an observation with a basis — nothing faked.</p>
+  <div class="glass">
+    <div class="searchbar">
+      <input id="q" placeholder="Search 66k products — “glossy emperador marble tile”, “brass pendant light”…" autocomplete="off" />
+      <button id="go">Search <span class="arrow" aria-hidden="true">→</span></button>
+    </div>
+    <div class="hint">Prices are observations with a basis, served freshest-first.</div>
+    <div class="chips" id="chips"></div>
+  </div>
+</section>
 
 <main>
-  <section class="hero">
-    <h1>DSource Material Bank</h1>
-    <p class="lead">An India-first catalog of real architectural materials — real specs, honest prices, semantic search. Every price is an observation with a basis; nothing is faked.</p>
-  </section>
-
   <section class="tiles" id="tiles" aria-label="coverage"></section>
-
-  <div class="searchbar">
-    <input id="q" placeholder="Search 66k products — e.g. “glossy emperador marble tile”, “brass pendant light”, “handwoven jute rug”" autocomplete="off" />
-    <button id="go">Search <span class="arrow" aria-hidden="true">→</span></button>
-  </div>
-  <div class="hint">Hybrid keyword + semantic search over the embedded catalog. Prices are observations with a basis.</div>
-  <div class="chips" id="chips"></div>
 
   <div class="results-h" id="results-h" style="margin-top:48px; display:none;"></div>
   <section class="grid" id="results"></section>
@@ -240,7 +270,6 @@
 <footer>
   <p class="statement">Real specs. Honest prices. Nothing faked.</p>
   <div class="colophon">Deterministic registry-driven pipeline · marqo-ecommerce-B embeddings · prices labelled by basis, never faked.</div>
-  <div class="colophon" id="pipeline" style="margin-top:8px"></div>
 </footer>
 
 <script>
@@ -256,11 +285,11 @@ function priceHTML(p) {
          `<div class="basis">${p.basis}${stale}</div>`;
 }
 
-function cardHTML(r) {
+function cardHTML(r, i) {
   const im = r.image_url
     ? `<img loading="lazy" src="${img(r.image_url)}" onerror="this.replaceWith(Object.assign(document.createElement('div'),{className:'ph',textContent:'no image'}))">`
     : `<div class="ph">no image</div>`;
-  return `<article class="card" data-id="${r.id}">
+  return `<article class="card" data-id="${r.id}" style="animation-delay:${Math.min(i * 20, 180)}ms">
     <div class="img">${im}</div>
     <div class="body">
       <div class="t">${escape(r.title || "Untitled")}</div>
@@ -269,20 +298,6 @@ function cardHTML(r) {
     </div></article>`;
 }
 function escape(s){const d=document.createElement("div");d.textContent=s;return d.innerHTML;}
-
-async function loadPipeline() {
-  try {
-    const d = await (await fetch("/api/pipeline")).json();
-    const j = d.jobs || {};
-    const dead = (d.dead_letters || []).length;
-    const parts = [`harvest queue — ${j.done||0} done`, `${j.pending||0} pending`,
-                   `${j.running||0} running`];
-    let txt = parts.join(" · ");
-    if (j.failed) txt += ` · <span style="color:var(--color-cerulean)">${j.failed} failed (retried, then dead-lettered)</span>`;
-    if (dead) txt += ` — ${dead} need attention`;
-    $("#pipeline").innerHTML = txt;
-  } catch (e) { /* pre-queue db */ }
-}
 
 async function loadStats() {
   const s = await (await fetch("/api/stats")).json();
@@ -321,6 +336,7 @@ async function search() {
   $("#results-h").textContent = r.length ? `${r.length} results for “${q}”` : "";
   $("#results").innerHTML = r.map(cardHTML).join("");
   document.querySelectorAll("#results .card").forEach(c => c.onclick = () => openProduct(c.dataset.id));
+  $("#results-h").scrollIntoView({behavior: "smooth", block: "start"});
 }
 
 async function openProduct(id) {
@@ -351,7 +367,7 @@ $("#overlay").onclick = e => { if (e.target.id === "overlay") closeModal(); };
 
 $("#go").onclick = search;
 $("#q").addEventListener("keydown", e => { if (e.key === "Enter") search(); });
-loadStats(); loadChips(); loadPipeline();
+loadStats(); loadChips();
 </script>
 </body>
 </html>
