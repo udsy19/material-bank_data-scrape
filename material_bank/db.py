@@ -19,7 +19,7 @@ from urllib.parse import urlparse
 
 from .models import NormalizedProduct, PriceObservation, Supplier
 
-SCHEMA_VERSION = 6
+SCHEMA_VERSION = 7
 
 _REPO_ROOT = Path(__file__).resolve().parent.parent
 DEFAULT_DB_PATH = _REPO_ROOT / "data" / "catalog.db"
@@ -222,6 +222,20 @@ CREATE TABLE IF NOT EXISTS pipeline_jobs (
 CREATE INDEX IF NOT EXISTS idx_jobs_claim ON pipeline_jobs(stage, status, next_run_at);
 """
 
+# Per-harvest yield history — the signal drift detection reads to spot parser
+# rot (a yield that suddenly collapses) and auto-open a repair job (Stage 9).
+_HARVEST_HISTORY_DDL = """
+CREATE TABLE IF NOT EXISTS harvest_history (
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    domain      TEXT NOT NULL,
+    observed_at TEXT NOT NULL,
+    products    INTEGER,
+    priced      INTEGER,
+    quarantined INTEGER
+);
+CREATE INDEX IF NOT EXISTS idx_hist_domain ON harvest_history(domain, observed_at);
+"""
+
 _MIGRATIONS = (
     (1, _SUPPLIERS_DDL, "initial: suppliers registry + probe fields"),
     (2, _PRODUCTS_DDL, "products spec schema: surface units + per-field provenance"),
@@ -229,7 +243,16 @@ _MIGRATIONS = (
     (4, _PRODUCTS_IMAGE_URL_DDL + _EMBEDDINGS_DDL, "products.image_url + embeddings vector store"),
     (5, _FTS_DDL, "FTS5 keyword index over products (hybrid retrieval)"),
     (6, _PIPELINE_JOBS_DDL, "pipeline_jobs durable queue with retry/backoff"),
+    (7, _HARVEST_HISTORY_DDL, "harvest_history for yield-drift self-healing"),
 )
+
+
+def record_harvest(conn: sqlite3.Connection, domain: str, *, products: int,
+                   priced: int = 0, quarantined: int = 0) -> None:
+    conn.execute(
+        "INSERT INTO harvest_history (domain, observed_at, products, priced, quarantined) "
+        "VALUES (?,?,?,?,?)", (domain, now_iso(), products, priced, quarantined))
+    conn.commit()
 
 
 def rebuild_fts(conn: sqlite3.Connection) -> int:

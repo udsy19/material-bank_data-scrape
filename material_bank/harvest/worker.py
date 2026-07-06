@@ -58,9 +58,13 @@ def run_harvest_job(conn: sqlite3.Connection, domain: str, *,
         raise TransientHarvestError(f"{domain} unreachable (attempt will retry)")
     after = conn.execute("SELECT COUNT(*) FROM products WHERE supplier_domain=?",
                          (domain,)).fetchone()[0]
+    priced = conn.execute(
+        "SELECT COUNT(DISTINCT po.product_id) FROM price_observation po "
+        "JOIN products p ON p.id=po.product_id WHERE p.supplier_domain=?", (domain,)).fetchone()[0]
     conn.execute("UPDATE suppliers SET last_harvest=?, last_yield=? WHERE domain=?",
                  (db.now_iso(), after, domain))
-    conn.commit()
+    db.record_harvest(conn, domain, products=after, priced=priced,
+                      quarantined=stats.get("quarantined", 0))
     return stats
 
 

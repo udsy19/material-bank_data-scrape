@@ -14,7 +14,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from . import db, jobs
+from . import db, drift, jobs
 from .harvest import worker
 from .vectorstore import NumpyVectorStore
 
@@ -53,6 +53,9 @@ def run_pipeline(
 
     report = {"harvest_jobs": harvest_counts,
               "dead_letters": jobs.dead_letters(conn, worker.STAGE)}
+
+    # Self-healing: spot yield collapse / quarantine spikes, open repair jobs.
+    report["self_healing"] = drift.scan_and_open(conn)
 
     # Stage 2 — embed (resumable). Wrapped so a model failure surfaces, not crashes.
     if embed:

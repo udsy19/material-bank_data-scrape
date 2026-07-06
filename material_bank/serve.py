@@ -53,9 +53,10 @@ def create_app(state_provider) -> FastAPI:
         with lock:
             try:
                 return {"jobs": jobs.counts(s["conn"], "harvest"),
-                        "dead_letters": jobs.dead_letters(s["conn"], "harvest")}
+                        "dead_letters": jobs.dead_letters(s["conn"], "harvest"),
+                        "repairs": jobs.counts(s["conn"], "repair")}
             except Exception:
-                return {"jobs": {}, "dead_letters": []}  # pre-v6 db
+                return {"jobs": {}, "dead_letters": [], "repairs": {}}  # pre-v6 db
 
     @app.get("/api/match")
     def api_match(q: str = Query("", min_length=0), k: int = Query(20, ge=1, le=60)) -> dict:
