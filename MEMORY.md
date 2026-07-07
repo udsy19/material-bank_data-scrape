@@ -54,7 +54,13 @@ The registry-driven, self-maintaining harvest pipeline that gets **all major Ind
 - **Deps added:** fastapi, uvicorn, playwright(+chromium), httpx.
 - **Tests: 128 backend (all offline) + 13 browser e2e, all green.** schema_version **5**.
 
-## FINAL system state (2026-07-05)
+## System state (2026-07-06, uncapped run in progress)
+
+- **107,049 products · 84,398 priced · 107,049 text vectors (fully embedded+indexed) · 45 suppliers · 4,203 image vectors.** Server live on this.
+- Uncapped JSON-LD harvest resuming (jaipurrugs→~38k, wallmantra 13k, somany 7.9k, wakefit 6.1k, urbanladder growing). **source_url resume fix (schema v8) unstuck the giants** (were frozen at 499). qutone dead-lettered (no sitemap — honest). Session teardown kills the bg harvest, but each resume is efficient + durable (queue + source_url) — nothing lost.
+- **Resume commands:** harvest → `python -m material_bank.harvest.worker --tiers jsonld --workers 8 --jsonld-limit 0 --reset`; full loop → `python -m material_bank.pipeline`; server → `uvicorn material_bank.serve:app`.
+
+## Earlier milestone (2026-07-05)
 
 - **36 suppliers harvested · 66,387 products · 63,577 priced (96%) · 77,612 price observations · 66,387 text vectors · 4,203 image vectors · 34 categories · 108 quarantined.**
 - Full pipeline live end-to-end: **probe → harvest (shopify/woo/jsonld/tier3) → normalize (units+provenance) → price observations → embed (text+image shared space) → FTS5+vector hybrid retrieval → FastAPI serving → browser dashboard**, all deterministic except the 4 LLM slots (none invoked yet).
