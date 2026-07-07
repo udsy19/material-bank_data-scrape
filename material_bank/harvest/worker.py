@@ -14,7 +14,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 
 from .. import db, jobs
 from ..fetch import Fetcher
-from .run import DISPATCH, _registry_brand
+from .run import DISPATCH, DOMAIN_HARVESTERS, _registry_brand
 
 STAGE = "harvest"
 
@@ -44,9 +44,9 @@ def run_harvest_job(conn: sqlite3.Connection, domain: str, *,
     if row is None:
         raise ValueError(f"no supplier row for {domain}")
     tier = row["scrape_tier"]
-    harvester = DISPATCH.get(tier)
+    harvester = DOMAIN_HARVESTERS.get(domain) or DISPATCH.get(tier)
     if harvester is None:
-        raise ValueError(f"no harvester for tier {tier!r}")
+        raise ValueError(f"no harvester for {domain} (tier {tier!r})")
     fetcher = Fetcher(min_interval=min_interval, raw_dir=None)
     kwargs = dict(domain=domain, brand=_registry_brand(row), categories=row["categories"] or "")
     if tier == "jsonld":

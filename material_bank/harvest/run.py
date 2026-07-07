@@ -13,6 +13,7 @@ import sys
 from .. import db
 from ..fetch import Fetcher
 from .jsonld import harvest_jsonld
+from .kajaria import harvest_kajaria
 from .shopify import harvest_shopify
 from .woocommerce import harvest_woo
 
@@ -21,6 +22,12 @@ DISPATCH = {
     "shopify": harvest_shopify,
     "woocommerce": harvest_woo,
     "jsonld": harvest_jsonld,
+}
+
+# domain -> custom harvester (checked before tier DISPATCH) for sites with a
+# bespoke structure (like Orientbell's Magento, Kajaria's static+PDF specs).
+DOMAIN_HARVESTERS = {
+    "kajariaceramics.com": harvest_kajaria,
 }
 
 
