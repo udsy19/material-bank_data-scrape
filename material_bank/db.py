@@ -19,7 +19,7 @@ from urllib.parse import urlparse
 
 from .models import NormalizedProduct, PriceObservation, Supplier
 
-SCHEMA_VERSION = 9
+SCHEMA_VERSION = 10
 
 _REPO_ROOT = Path(__file__).resolve().parent.parent
 DEFAULT_DB_PATH = _REPO_ROOT / "data" / "catalog.db"
@@ -266,6 +266,16 @@ _MIGRATIONS = (
         CREATE INDEX IF NOT EXISTS idx_metrics_key ON metrics(key, captured_at);
         """,
      "trust contract: completeness/tier/publish gate + metrics time series"),
+    # Phase B: fields deterministic enrichment fills (description fuels later
+    # extraction + LLM phases; enriched_at is the enrich stage's resume marker).
+    (10, """
+        ALTER TABLE products ADD COLUMN description TEXT;
+        ALTER TABLE products ADD COLUMN color TEXT;
+        ALTER TABLE products ADD COLUMN color_family TEXT;
+        ALTER TABLE products ADD COLUMN thickness_mm REAL;
+        ALTER TABLE products ADD COLUMN enriched_at TEXT;
+        """,
+     "enrichment fields: description, color(+family), thickness, enriched_at"),
 )
 
 

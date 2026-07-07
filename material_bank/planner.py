@@ -15,15 +15,19 @@ from .quality import quality_report, score_all, snapshot_metrics
 
 
 def run_planner(db_path: str | Path | None = None) -> dict:
+    from .enrich import seed_enrich_jobs   # late import: enrich pulls in fetch
+
     conn = db.connect(str(db_path or db.DEFAULT_DB_PATH), check_same_thread=False)
     db.migrate(conn)
     summary = score_all(conn)
     snapshot_rows = snapshot_metrics(conn)
+    enrich_jobs = seed_enrich_jobs(conn)    # measured gaps -> queued work
     report = quality_report(conn)
     conn.close()
     return {"scored": summary["scored"], "publish_ready": report["publish_ready"],
             "median_completeness": report["median_completeness"],
             "tiers": report["tiers"], "snapshot_rows": snapshot_rows,
+            "enrich_jobs_seeded": enrich_jobs,
             "worst_categories": report["worst_categories"][:5]}
 
 
