@@ -7,6 +7,15 @@
 - **NEXT BUILD: Phase A — Foundation of Trust**: `canonical_products` + category-specific completeness scoring + `metrics` snapshots table + QA/trust dashboard + publish gate + `mb-planner` timer. Then B (deterministic enrichment: taxonomy v1 w/ OmniClass mapping + extractors + generalized PDF mining + dual-unit prices), then C (entity resolution/golden records → price comparison), then D (LLM enrichment — **blocked on ANTHROPIC/GEMINI keys**).
 - Decisions owed by owner: ANTHROPIC key (Gemini key received 2026-07-07), Act-1 pricing posture, product name/domain.
 
+## Phase A — Foundation of Trust: LIVE (2026-07-07)
+
+- **Schema v9**: products carry the trust contract (`completeness` 0–100, `verification_tier`, `publish_ready`, `scored_at`) + `metrics` time-series table. `quality.py` = category-aware scoring (surfaces held to the units bar), deterministic contradiction checks, publish gate (surface≥70 / default≥60 AND not unverified); human tiers never auto-downgraded. `planner.py` (flywheel v0) runs in every hourly sweep: score_all → snapshot_metrics → gap report.
+- **First live scoring (143,746 products, 10s)**: 131,861 publish-ready (92%) · 18 unverified · **worst gaps quantified**: laminates|acrylic|cladding 0/1998 ready (median 41 — no units), tiles 4,222/12,935 (median 59 — specs-only Kajaria/Somany below the surface bar). **These gap lists ARE the Phase B work-list.**
+- **API**: `/api/catalog` = publish-GATED external surface (tiles: 4,222) · `/api/products` = internal full view w/ trust fields (tiles: 12,935) · `/api/quality` = cockpit (report + trends). Dashboard has publish-ready + median-completeness tiles.
+- Deviation from VISION §7 (deliberate, no-bloat): no separate `canonical_products` table yet — trust columns live on `products` until Phase C merging justifies a canonical layer.
+- **Gotcha fixed**: writing on a connection whose open read-cursor snapshot went stale ⇒ SQLITE_BUSY_SNAPSHOT instantly (bypasses busy_timeout by design under WAL). Rule: **fully materialize reads before writing on the same connection** (score_all does read-then-write).
+- **NEXT: Phase B — deterministic enrichment** targeting the measured gaps: attribute extractors (size/finish/color from titles+descriptions), generalized PDF spec-mining (Somany/Nitco/Simpolo), taxonomy v1, dual-unit price normalization. Gemini key available for the classify-fallback slot.
+
 ## CI/CD + durability (2026-07-07)
 
 - **GitHub is now the source of truth**: main pushed (was local-only!). VPS is a real clone with a write **deploy key** (added via gh api, id 156633150).
