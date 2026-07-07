@@ -15,6 +15,7 @@ from ..fetch import Fetcher
 from .jsonld import harvest_jsonld
 from .kajaria import harvest_kajaria
 from .shopify import harvest_shopify
+from .steelcase import harvest_steelcase
 from .woocommerce import harvest_woo
 
 # tier -> harvester. tier3 uses the Playwright harvester (run separately).
@@ -28,6 +29,7 @@ DISPATCH = {
 # bespoke structure (like Orientbell's Magento, Kajaria's static+PDF specs).
 DOMAIN_HARVESTERS = {
     "kajariaceramics.com": harvest_kajaria,
+    "steelcase.com": harvest_steelcase,  # full asia-en catalog (in.steelcase.com = refurb shop)
 }
 
 
