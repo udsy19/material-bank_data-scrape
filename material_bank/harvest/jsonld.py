@@ -105,6 +105,9 @@ def enumerate_pdp_urls(fetcher: Fetcher, sitemap_url: str) -> list[str]:
             if rc.ok:
                 pages += parse_sitemap(rc.text)[1]
         locs = pages
+    # Drop asset URLs (Magento sitemaps mix product-image URLs into the set).
+    locs = [u for u in locs if not u.lower().split("?")[0].endswith(
+        (".jpg", ".jpeg", ".png", ".webp", ".gif", ".svg", ".pdf", ".css", ".js"))]
     # Prefer product-looking URLs; if the site uses flat slugs, keep all.
     prod = [u for u in locs if any(h in u.lower() for h in _PRODUCT_HINTS)]
     return prod if len(prod) >= 10 else locs
