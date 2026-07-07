@@ -312,6 +312,12 @@ async function loadStats() {
     ["categories", s.categories],
     ["quarantine", s.quarantine],
   ];
+  if (s.publish_ready !== undefined) {
+    const rpct = s.products ? Math.round(100*s.publish_ready/s.products) : 0;
+    tiles.splice(3, 0,
+      ["publish-ready", `${s.publish_ready.toLocaleString()} <small>${rpct}%</small>`],
+      ["median completeness", `${s.median_completeness}<small>/100</small>`]);
+  }
   $("#tiles").innerHTML = tiles.map(([l,n]) =>
     `<div class="tile"><div class="n serif">${n}</div><div class="l">${l}</div></div>`).join("");
   $("#suppliers").innerHTML = `<h2>Top suppliers</h2><div class="slist">` +

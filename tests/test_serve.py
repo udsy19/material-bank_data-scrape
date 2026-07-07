@@ -40,7 +40,9 @@ def client(tmp_path):
 
     app = create_app(lambda: {"conn": conn, "store": store, "embedder": emb,
                               "fetch_image": _fake_fetch_image})
-    yield TestClient(app)
+    tc = TestClient(app)
+    tc.conn = conn   # exposed so tests can score/mutate directly
+    yield tc
     conn.close()
 
 
@@ -132,3 +134,24 @@ def test_suppliers_endpoint(client):
     assert d["count"] == 3
     doms = {s["domain"]: s for s in d["suppliers"]}
     assert doms["orientbell.com"]["products"] == 1 and doms["orientbell.com"]["priced"] == 1
+
+
+def test_catalog_is_publish_gated(client):
+    # nothing scored yet -> the external catalog is empty (gate closed by default)
+    assert client.get("/api/catalog").json()["total"] == 0
+    # internal listing still shows everything, with trust fields exposed
+    d = client.get("/api/products").json()
+    assert d["total"] == 3 and "publish_ready" in d["items"][0]
+    # after the planner scores, publishable records appear on the catalog surface
+    from material_bank.quality import score_all
+    score_all(client.conn)
+    gated = client.get("/api/catalog").json()
+    assert 0 < gated["total"] <= 3
+    assert all(i["publish_ready"] == 1 for i in gated["items"])
+
+
+def test_quality_endpoint_shape(client):
+    q = client.get("/api/quality").json()
+    for k in ("products", "publish_ready", "median_completeness", "tiers", "trend"):
+        assert k in q
+    assert q["products"] == 3

@@ -108,6 +108,12 @@ def stats(conn: sqlite3.Connection) -> dict:
         "image_vectors": q("SELECT COUNT(*) FROM embeddings WHERE kind='image'"),
         "quarantine": q("SELECT COUNT(*) FROM quarantine"),
         "categories": q("SELECT COUNT(DISTINCT category) FROM products"),
+        # trust contract (Phase A) — 0 until the planner's first scoring run
+        "publish_ready": q("SELECT COUNT(*) FROM products WHERE publish_ready=1"),
+        "median_completeness": (lambda r: r[0] if r else 0)(conn.execute(
+            "SELECT completeness FROM products WHERE completeness IS NOT NULL "
+            "ORDER BY completeness LIMIT 1 OFFSET "
+            "(SELECT COUNT(*) FROM products WHERE completeness IS NOT NULL)/2").fetchone()) or 0,
     }
 
 
@@ -150,6 +156,7 @@ def list_products(
     has_image: bool | None = None,
     min_price: float | None = None,
     max_price: float | None = None,
+    publish_ready: bool | None = None,
     order: str = "id",
     desc: bool = False,
     limit: int = 50,
@@ -183,6 +190,10 @@ def list_products(
         where.append("l.price_inr >= ?"); params.append(float(min_price))
     if max_price is not None:
         where.append("l.price_inr <= ?"); params.append(float(max_price))
+    if publish_ready is True:
+        where.append("p.publish_ready = 1")
+    elif publish_ready is False:
+        where.append("p.publish_ready = 0")
     clause = ("WHERE " + " AND ".join(where)) if where else ""
 
     # freshest price per product via a grouped subquery
@@ -201,7 +212,8 @@ def list_products(
     rows = conn.execute(
         f"""SELECT p.id, p.brand, p.title, p.category, p.size_mm, p.finish,
                    p.price_unit, p.coverage_sqft_per_box, p.image_url, p.source_url,
-                   p.supplier_domain, l.price_inr, l.basis AS price_basis
+                   p.supplier_domain, l.price_inr, l.basis AS price_basis,
+                   p.completeness, p.verification_tier, p.publish_ready
             {base} ORDER BY {order_col} {direction}, p.id LIMIT ? OFFSET ?""",
         [*params, limit, offset]).fetchall()
     return {"total": total, "count": len(rows), "limit": limit, "offset": offset,

@@ -41,4 +41,7 @@ print("[harvest] self-heal:", drift.scan_and_open(c))
 print("[harvest] repairs:", repair.drain_repairs())
 EOF
 
+# 5) the planner: re-score the trust contract + snapshot the scorecard
+$PY -m material_bank.planner || echo "[harvest] planner failed (non-fatal)"
+
 echo "[harvest] sweep done"

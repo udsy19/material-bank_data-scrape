@@ -19,7 +19,7 @@ from urllib.parse import urlparse
 
 from .models import NormalizedProduct, PriceObservation, Supplier
 
-SCHEMA_VERSION = 8
+SCHEMA_VERSION = 9
 
 _REPO_ROOT = Path(__file__).resolve().parent.parent
 DEFAULT_DB_PATH = _REPO_ROOT / "data" / "catalog.db"
@@ -247,6 +247,25 @@ _MIGRATIONS = (
     (8, "ALTER TABLE products ADD COLUMN source_url TEXT;"
         "CREATE INDEX IF NOT EXISTS idx_products_srcurl ON products(supplier_domain, source_url);",
      "products.source_url — exact resume key for specs-only harvests"),
+    # Phase A (Foundation of Trust): the trust contract lives ON the product —
+    # completeness (0-100, category-aware), verification tier, publish gate —
+    # plus a metrics table so "getting better" is a stored time series.
+    (9, """
+        ALTER TABLE products ADD COLUMN completeness INTEGER;
+        ALTER TABLE products ADD COLUMN verification_tier TEXT NOT NULL DEFAULT 'unverified';
+        ALTER TABLE products ADD COLUMN publish_ready INTEGER NOT NULL DEFAULT 0;
+        ALTER TABLE products ADD COLUMN scored_at TEXT;
+        CREATE INDEX IF NOT EXISTS idx_products_publish ON products(publish_ready);
+        CREATE TABLE IF NOT EXISTS metrics (
+            id          INTEGER PRIMARY KEY AUTOINCREMENT,
+            captured_at TEXT NOT NULL,
+            scope       TEXT NOT NULL DEFAULT 'global',
+            key         TEXT NOT NULL,
+            value       REAL
+        );
+        CREATE INDEX IF NOT EXISTS idx_metrics_key ON metrics(key, captured_at);
+        """,
+     "trust contract: completeness/tier/publish gate + metrics time series"),
 )
 
 

@@ -84,18 +84,53 @@ def create_app(state_provider) -> FastAPI:
         has_image: bool | None = None,
         min_price: float | None = None,
         max_price: float | None = None,
+        publish_ready: bool | None = None,
         order: str = Query("id", pattern="^(id|price|title|brand)$"),
         desc: bool = False,
         limit: int = Query(50, ge=1, le=200),
         offset: int = Query(0, ge=0),
     ) -> dict:
-        """Filtered, paginated catalog listing (structured retrieval, not search)."""
+        """Full internal listing (includes in-enrichment records; trust fields exposed)."""
         s = S()
         with lock:
             return list_products(s["conn"], supplier=supplier, category=category, brand=brand,
                                  q=q, priced=priced, has_image=has_image, min_price=min_price,
-                                 max_price=max_price, order=order, desc=desc,
+                                 max_price=max_price, publish_ready=publish_ready,
+                                 order=order, desc=desc, limit=limit, offset=offset)
+
+    @app.get("/api/catalog")
+    def api_catalog(
+        supplier: str | None = None,
+        category: str | None = None,
+        brand: str | None = None,
+        q: str | None = None,
+        min_price: float | None = None,
+        max_price: float | None = None,
+        order: str = Query("id", pattern="^(id|price|title|brand)$"),
+        desc: bool = False,
+        limit: int = Query(50, ge=1, le=200),
+        offset: int = Query(0, ge=0),
+    ) -> dict:
+        """The B2B catalog surface: publish-gated — only verified-complete records."""
+        s = S()
+        with lock:
+            return list_products(s["conn"], supplier=supplier, category=category, brand=brand,
+                                 q=q, min_price=min_price, max_price=max_price,
+                                 publish_ready=True, order=order, desc=desc,
                                  limit=limit, offset=offset)
+
+    @app.get("/api/quality")
+    def api_quality() -> dict:
+        """The trust cockpit: live quality report + scorecard trend."""
+        from .quality import metrics_trend, quality_report
+        s = S()
+        with lock:
+            rep = quality_report(s["conn"])
+            rep["trend"] = {
+                "publish_ready": metrics_trend(s["conn"], "publish_ready", 30),
+                "median_completeness": metrics_trend(s["conn"], "median_completeness", 30),
+            }
+        return rep
 
     @app.get("/api/suppliers")
     def api_suppliers() -> dict:
@@ -172,6 +207,7 @@ def default_state_provider() -> dict:
     from .embeddings import MarqoEmbedder
 
     conn = db.connect(check_same_thread=False)
+    db.migrate(conn)   # api may boot before any worker after a deploy — own the schema
     store = NumpyVectorStore(conn)
     store.preload("text")
     store.preload("image")
