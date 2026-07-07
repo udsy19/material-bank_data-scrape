@@ -54,6 +54,13 @@ The registry-driven, self-maintaining harvest pipeline that gets **all major Ind
 - **Deps added:** fastapi, uvicorn, playwright(+chromium), httpx.
 - **Tests: 128 backend (all offline) + 13 browser e2e, all green.** schema_version **5**.
 
+## Kajaria + PDF-spec capability (2026-07-06)
+
+- ✅ **`harvest/kajaria.py`** — Kajaria has no catalog/API; PDPs render specs as icon SVGs. But static HTML has name + correct product image + a **technical-PDF link**; those PDFs (parsed with **pdfplumber**, MIT) give real **size/thickness/coverage_sqft_per_box** — the surface field even Orientbell lacks. Static fetch (no Playwright) → distinct correct images. Specs-only (no price; price_unit/finish flagged missing). PDF parse cached per collection.
+- **`DOMAIN_HARVESTERS`** (in `harvest/run.py`) routes specific domains to bespoke harvesters (kajariaceramics.com → harvest_kajaria); worker checks it before tier DISPATCH. Reusable pattern for other custom sites.
+- **Reusable PDF-spec ingestion** (`specs_from_text` / `parse_technical_pdf`) applies to other spec-only tile brands (Somany/Nitco/Simpolo) + building-material PDFs → toward Stage-6 enrichment.
+- Registry repairs done: geeken.in→jsonld (~2400), hindware.com→jsonld (~3500, was hindwarehomes.com dead); whiteteak.com/ozone.in revived to tier3; 6 ambiguous→tier3; marshallswallcoverings→dup. Seed CSV updated + committed.
+
 ## System state (2026-07-06, uncapped run in progress)
 
 - **107,049 products · 84,398 priced · 107,049 text vectors (fully embedded+indexed) · 45 suppliers · 4,203 image vectors.** Server live on this.
