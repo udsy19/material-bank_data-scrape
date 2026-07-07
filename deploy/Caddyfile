@@ -1,0 +1,7 @@
+# HTTPS without owning a domain: sslip.io resolves <ip>.sslip.io -> <ip>, and
+# Caddy auto-provisions a Let's Encrypt cert for that hostname. Reverse-proxies
+# to the uvicorn API on :8000. Swap the hostname for your real domain later.
+46.202.179.28.sslip.io {
+    reverse_proxy localhost:8000
+    encode gzip
+}

@@ -58,12 +58,38 @@ journalctl -u mb-embed -n 100       # recent embed passes
 # re-arm dead-letters: python -m material_bank.harvest.worker --retry-dead
 ```
 
-## Make the API public (optional)
-Put nginx/Caddy in front for TLS; don't expose uvicorn directly. Example Caddy:
+## HTTPS without owning a domain (sslip.io + Caddy)
+`sslip.io` resolves `<ip>.sslip.io` -> `<ip>`, so Caddy can get a real Let's
+Encrypt cert for it. Already set up on the VPS -> **https://46.202.179.28.sslip.io**.
+```bash
+# install caddy (cloudsmith repo), then:
+cp deploy/Caddyfile /etc/caddy/Caddyfile      # 46.202.179.28.sslip.io { reverse_proxy localhost:8000 }
+systemctl restart caddy
 ```
-material.yourdomain.com {
-    reverse_proxy 127.0.0.1:8000
-}
+Swap the hostname in `deploy/Caddyfile` for a real domain later (just point its
+A record at the IP).
+
+## API endpoints
+| endpoint | purpose |
+|---|---|
+| `GET /api/stats` | coverage counts + top suppliers |
+| `GET /api/suppliers` | every supplier with product/priced/image counts + tier |
+| `GET /api/match?q=&k=` | hybrid keyword+semantic search |
+| `GET /api/products` | **structured listing** — filters below, paginated |
+| `GET /api/product/{id}` | one product + all price observations + similar |
+| `GET /api/pipeline` | harvest-queue health + dead-letters |
+| `GET /api/image?url=` | image proxy |
+
+`/api/products` filters (all optional, combine freely):
+`supplier`, `brand`, `category` (substring), `q` (title substring),
+`priced` (true/false), `has_image` (true/false), `min_price`, `max_price`,
+`order` (id|price|title|brand), `desc` (true/false), `limit` (<=200), `offset`.
+Returns `{total, count, limit, offset, items[]}`.
+```bash
+# priced tiles over Rs 100, cheapest first, page 1
+curl 'https://46.202.179.28.sslip.io/api/products?category=tiles&priced=true&min_price=100&order=price&limit=20'
+# everything from one supplier
+curl 'https://46.202.179.28.sslip.io/api/products?supplier=interio.com&limit=50'
 ```
 
 ## Notes
