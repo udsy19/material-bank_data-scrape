@@ -92,6 +92,23 @@ curl 'https://46.202.179.28.sslip.io/api/products?category=tiles&priced=true&min
 curl 'https://46.202.179.28.sslip.io/api/products?supplier=interio.com&limit=50'
 ```
 
+## CI/CD + disaster recovery (nothing gets lost)
+| unit | cadence | does |
+|---|---|---|
+| `mb-deploy.timer` | 5 min | fetch origin/main → if moved: reset --hard, pip-sync on requirements change, re-render units on unit change, restart services. **Push to GitHub from anywhere → live on the VPS ≤5 min.** |
+| `mb-backup.timer` | 6 h | full local .db snapshot (keep 2) + **essential dump** (everything except recomputable embeddings/FTS, ~11MB gz) → *verified by restoring into a temp db* → force-pushed to the `vps-backups` branch on GitHub |
+
+**If the VPS dies** — full recovery on any fresh box:
+```bash
+git clone git@github.com:udsy19/material-bank_data-scrape.git /opt/material-bank
+cd /opt/material-bank && sudo bash deploy/bootstrap.sh          # provisions + services
+git fetch origin vps-backups && git show origin/vps-backups:catalog-essential.sql.gz > /tmp/e.sql.gz
+rm -f data/catalog.db && ./.venv/bin/python -m material_bank.backup restore /tmp/e.sql.gz data/catalog.db
+systemctl restart mb-api mb-embed   # embed worker re-fills embeddings (~1h); FTS already rebuilt
+```
+Secrets: `/opt/material-bank/.env` (chmod 600, gitignored) — `GEMINI_API_KEY`, plumbed
+into every service via `EnvironmentFile`. Re-create by hand on a new box.
+
 ## Notes
 - **Politeness is preserved** — ~1 req/2s per domain still holds; the VPS just
   removes the teardown problem, it doesn't (and shouldn't) crawl faster.

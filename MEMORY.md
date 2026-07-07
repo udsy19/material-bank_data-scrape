@@ -5,7 +5,14 @@
 - The catalog **is** the product: B2B material-intelligence platform (intelligence-first, commerce-later). Reference bar: Material Bank US (brands-pay flip, enrichment/facets) + MaterialDepot India (dual pricing, BOM, commerce). Our wedge: breadth + **cross-supplier price observations** + the trust contract (per-field provenance, completeness scores, publish gate).
 - **CLAUDE.md rewritten** for this product (new hard rules: publish gate, autonomy-first, standards-grounded taxonomy, LLM-only-adds-content/estimated). **VISION.md** holds business model, autonomy flywheel (planner turns metric gaps into pipeline_jobs stages), roadmap A–F, north-star metrics.
 - **NEXT BUILD: Phase A — Foundation of Trust**: `canonical_products` + category-specific completeness scoring + `metrics` snapshots table + QA/trust dashboard + publish gate + `mb-planner` timer. Then B (deterministic enrichment: taxonomy v1 w/ OmniClass mapping + extractors + generalized PDF mining + dual-unit prices), then C (entity resolution/golden records → price comparison), then D (LLM enrichment — **blocked on ANTHROPIC/GEMINI keys**).
-- Decisions owed by owner: API keys (Phase D), Act-1 pricing posture, product name/domain.
+- Decisions owed by owner: ANTHROPIC key (Gemini key received 2026-07-07), Act-1 pricing posture, product name/domain.
+
+## CI/CD + durability (2026-07-07)
+
+- **GitHub is now the source of truth**: main pushed (was local-only!). VPS is a real clone with a write **deploy key** (added via gh api, id 156633150).
+- **CD**: `mb-deploy.timer` (5 min, root) — origin/main moved ⇒ reset --hard + pip-sync-if-changed + unit-reinstall-if-changed + restart. **Proven end-to-end** (push → live in <4 min). Deploy flow is now: commit locally → `git push` → done. No more rsync.
+- **Backups**: `mb-backup.timer` (6h) — full local snapshot (keep 2) + essential dump (all tables except embeddings/FTS, ~11MB gz for 141k products) **verified-by-restore** then force-pushed to `vps-backups` branch. Restore runbook in `deploy/README.md` (backup.py restore rebuilds FTS; embed worker refills vectors).
+- **GEMINI_API_KEY** stored in `.env` (600, gitignored) local + VPS, plumbed into all services via `EnvironmentFile` — **Phase D Gemini slots unblocked** (classification, near-dup enrichment). Anthropic key still owed for Haiku/Opus slots.
 
 Single source of truth for *current* state: locked decisions, status, real vs synthetic, open questions. Companion to `CLAUDE.md` (rules) and `PIPELINE.md` (the plan). Update as work lands.
 
