@@ -16,6 +16,12 @@
 - **Gotcha fixed**: writing on a connection whose open read-cursor snapshot went stale ⇒ SQLITE_BUSY_SNAPSHOT instantly (bypasses busy_timeout by design under WAL). Rule: **fully materialize reads before writing on the same connection** (score_all does read-then-write).
 - **NEXT: Phase B — deterministic enrichment** targeting the measured gaps: attribute extractors (size/finish/color from titles+descriptions), generalized PDF spec-mining (Somany/Nitco/Simpolo), taxonomy v1, dual-unit price normalization. Gemini key available for the classify-fallback slot.
 
+## Phase B core — deterministic enrichment: LIVE (2026-07-07)
+
+- **Schema v10** (description, color, color_family, thickness_mm, enriched_at). `extract.py`: conservative extractors (size w/ ft/in/cm→mm; bare NxM only at mm scale; finish vocab; color→family; sheet-coverage derivation). `enrich.py`: title_pass (every sweep, free) + `enrich` queue stage (per-supplier PDP refetch, 400/supplier/sweep, ld+json description/additionalProperty, enriched_at resume marker). NULL-only COALESCE writes — **harvested values never overwritten**; everything `basis='derived'` with source `extracted:title|pdp`.
+- **First live run:** title-pass filled **129,160 fields on 70,343 products in 10s** (+555 over the gate). Refetch loop proven 8/8 jobs: Somany finish 0→254, descriptions storing. **Flywheel closes its first full loop: measure → seed → enrich → re-score, hourly, unattended.**
+- **Honest finding:** the stubborn gap categories have bare titles AND thin ld+json (Somany size yield low; Kajaria PDPs JS-rendered) — the remaining lift needs **generalized PDF spec-mining (Somany/Nitco tech sheets) + Playwright-rendered extraction**, which is the next Phase B chunk. Also owed: taxonomy v1 (OmniClass mapping), dual-unit price serving, image color-family.
+
 ## CI/CD + durability (2026-07-07)
 
 - **GitHub is now the source of truth**: main pushed (was local-only!). VPS is a real clone with a write **deploy key** (added via gh api, id 156633150).
