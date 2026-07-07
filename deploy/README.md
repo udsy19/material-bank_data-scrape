@@ -100,3 +100,4 @@ curl 'https://46.202.179.28.sslip.io/api/products?supplier=interio.com&limit=50'
   stopped (via `source_url` resume + `requeue_stale_running`).
 - Image embeddings are a separate slower backfill — run on demand:
   `python -m material_bank.harvest.images`.
+# CD smoke: 2026-07-07T20:40:11Z
