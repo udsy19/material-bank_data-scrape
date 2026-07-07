@@ -54,6 +54,14 @@ The registry-driven, self-maintaining harvest pipeline that gets **all major Ind
 - **Deps added:** fastapi, uvicorn, playwright(+chromium), httpx.
 - **Tests: 128 backend (all offline) + 13 browser e2e, all green.** schema_version **5**.
 
+## VPS DEPLOYMENT (2026-07-07) — runs 24/7
+
+- ✅ **Deployed to VPS `46.202.179.28` (Ubuntu 24.04, 2 vCPU, 7.8GB RAM, 96GB disk).** App at `/opt/material-bank`, user `mb`, venv `.venv`. SSH: `root@46.202.179.28` (password held by user, not stored here).
+- **3 systemd services (auto-restart, survive reboots):** `mb-harvest` (producer sweep + bespoke Kajaria/Steelcase + self-heal, 6h refresh), `mb-embed` (continuous consumer), `mb-api` (search+dashboard on `:8000`, **public → http://46.202.179.28:8000**).
+- **Handoff:** stopped local pipelines, checkpointed WAL, rsync'd code + catalog.db (670MB). VPS resumed harvest from exactly where local stopped (source_url + requeue_stale_running). Live catalog: **138k products, 109k priced, 138k vectors, 49 suppliers**.
+- **Deploy gotcha fixed:** open_clip re-pulls a PyPI torchvision that breaks a CPU torch wheel (`torchvision::nms does not exist`) — bootstrap now force-reinstalls the matched `torch/torchvision ==+cpu` pair LAST. See `deploy/` (bootstrap.sh, systemd/, harvest_service.sh, README.md).
+- **Ops:** `journalctl -u mb-harvest -f`; `systemctl restart mb-*`; add supplier row → next 6h sweep harvests it. Redeploy code: rsync to `/opt/material-bank` + `systemctl restart`. No TLS/nginx yet (raw `:8000`).
+
 ## Kajaria + PDF-spec capability (2026-07-06)
 
 - ✅ **`harvest/kajaria.py`** — Kajaria has no catalog/API; PDPs render specs as icon SVGs. But static HTML has name + correct product image + a **technical-PDF link**; those PDFs (parsed with **pdfplumber**, MIT) give real **size/thickness/coverage_sqft_per_box** — the surface field even Orientbell lacks. Static fetch (no Playwright) → distinct correct images. Specs-only (no price; price_unit/finish flagged missing). PDF parse cached per collection.
