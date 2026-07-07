@@ -109,23 +109,31 @@ def fail(conn: sqlite3.Connection, job_id: int, error: str, *,
     return status
 
 
-def enqueue_due_refreshes(conn: sqlite3.Connection, *, priced_days: int = 7,
-                          spec_days: int = 30, now: datetime | None = None) -> int:
-    """Re-arm harvest jobs for suppliers due a refresh (PIPELINE.md cadence:
-    priced sources weekly, spec-only monthly). Only 'done' jobs whose supplier's
-    last_harvest is past its window are reset — everything else is left alone, so
-    routine sweeps stay cheap and only re-fetch what's actually stale."""
+def enqueue_due_refreshes(conn: sqlite3.Connection, *, fast_days: float = 1,
+                          jsonld_days: float = 7, slow_days: float = 30,
+                          now: datetime | None = None) -> int:
+    """Re-arm harvest jobs for suppliers due a refresh, on a TIER-AWARE cadence so
+    the hourly sweep re-fetches only what's both stale and cheap:
+      * shopify/woo (bulk /products.json)  -> every ``fast_days`` (default daily)
+      * jsonld + priced (per-PDP, pricier) -> every ``jsonld_days`` (default weekly)
+      * everything else / spec-only        -> every ``slow_days`` (default monthly)
+    Re-fetching a 15k-PDP giant hourly would be impolite (ban risk) and pointless;
+    a Shopify catalog is one cheap API call, so it can refresh daily.
+    """
     ref = now or _now()
-    priced_cut = (ref - timedelta(days=priced_days)).isoformat()
-    spec_cut = (ref - timedelta(days=spec_days)).isoformat()
+    fast_cut = (ref - timedelta(days=fast_days)).isoformat()
+    jsonld_cut = (ref - timedelta(days=jsonld_days)).isoformat()
+    slow_cut = (ref - timedelta(days=slow_days)).isoformat()
     due = conn.execute(
         """
         SELECT j.target FROM pipeline_jobs j
         JOIN suppliers s ON s.domain = j.target
         WHERE j.stage='harvest' AND j.status='done' AND s.last_harvest IS NOT NULL
-          AND ( (s.price_published='yes'                 AND s.last_harvest < ?)
-             OR (COALESCE(s.price_published,'') != 'yes' AND s.last_harvest < ?) )
-        """, (priced_cut, spec_cut)).fetchall()
+          AND s.last_harvest < CASE
+                WHEN s.scrape_tier IN ('shopify','woocommerce')          THEN ?
+                WHEN s.scrape_tier = 'jsonld' AND s.price_published='yes' THEN ?
+                ELSE ? END
+        """, (fast_cut, jsonld_cut, slow_cut)).fetchall()
     for r in due:
         enqueue(conn, "harvest", r[0], reset=True)
     return len(due)

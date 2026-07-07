@@ -85,27 +85,30 @@ def test_requeue_stale_running(conn):
     assert jobs.claim(conn, "harvest")["id"] == job["id"]  # reclaimable
 
 
-def test_enqueue_due_refreshes_by_cadence(conn):
+def test_enqueue_due_refreshes_tier_aware(conn):
     from datetime import timedelta
     now = _now()
-    old = (now - timedelta(days=40)).isoformat()
-    recent = (now - timedelta(days=3)).isoformat()
-    # priced supplier harvested 40d ago -> due (weekly); spec supplier 40d -> due (monthly)
-    # priced supplier harvested 3d ago -> NOT due
-    for dom, priced, lh in [("priced_old.com", "yes", old), ("priced_new.com", "yes", recent),
-                            ("spec_old.com", "no", old), ("spec_recent.com", "no", recent)]:
+    def ago(d): return (now - timedelta(days=d)).isoformat()
+    # (domain, tier, priced, last_harvest_days_ago)
+    rows = [
+        ("shop_2d.com",   "shopify",     "yes", 2),   # fast(1d) -> DUE
+        ("shop_12h.com",  "shopify",     "yes", 0.5), # fast(1d) -> not due
+        ("big_3d.com",    "jsonld",      "yes", 3),   # jsonld(7d) -> not due (giant, spare it)
+        ("big_10d.com",   "jsonld",      "yes", 10),  # jsonld(7d) -> DUE
+        ("spec_10d.com",  "tier3",       "no",  10),  # slow(30d) -> not due
+        ("spec_40d.com",  "tier3",       "no",  40),  # slow(30d) -> DUE
+    ]
+    for dom, tier, priced, days in rows:
         conn.execute("INSERT INTO suppliers(brand,domain,status,scrape_tier,price_published,last_harvest) "
-                     "VALUES(?,?,?,?,?,?)", (dom, dom, "active", "shopify", priced, lh))
+                     "VALUES(?,?,?,?,?,?)", (dom, dom, "active", tier, priced, ago(days)))
         jobs.enqueue(conn, "harvest", dom)
-        j = jobs.claim(conn, "harvest"); jobs.complete(conn, j["id"])  # mark done
+        j = jobs.claim(conn, "harvest"); jobs.complete(conn, j["id"])
     conn.commit()
 
-    n = jobs.enqueue_due_refreshes(conn, priced_days=7, spec_days=30, now=now)
-    assert n == 2  # priced_old (7d window) + spec_old (30d window)
-    pending = {r[0] for r in conn.execute("SELECT target FROM pipeline_jobs WHERE status='pending'")}
-    assert pending == {"priced_old.com", "spec_old.com"}
-    # spec_recent (3d < 30d) and priced_new (3d < 7d) stay done -> cheap sweep
-    assert conn.execute("SELECT COUNT(*) FROM pipeline_jobs WHERE status='done'").fetchone()[0] == 2
+    n = jobs.enqueue_due_refreshes(conn, now=now)   # defaults: 1/7/30 days
+    assert n == 3
+    due = {r[0] for r in conn.execute("SELECT target FROM pipeline_jobs WHERE status='pending'")}
+    assert due == {"shop_2d.com", "big_10d.com", "spec_40d.com"}
 
 
 def test_reset_rearms_done_job(conn):

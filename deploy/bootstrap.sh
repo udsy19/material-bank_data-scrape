@@ -51,15 +51,15 @@ fi
 echo "==> warm the embedding model (one-time ~1GB download)"
 sudo -u "$APP_USER" bash -c "cd '$APP_DIR' && ./.venv/bin/python -c \"from material_bank.embeddings import MarqoEmbedder; MarqoEmbedder().encode_text(['warmup']); print('model ready')\""
 
-echo "==> install systemd services"
-sed "s#__APP_DIR__#$APP_DIR#g; s#__APP_USER__#$APP_USER#g" \
-  deploy/systemd/mb-embed.service   > /etc/systemd/system/mb-embed.service
-sed "s#__APP_DIR__#$APP_DIR#g; s#__APP_USER__#$APP_USER#g" \
-  deploy/systemd/mb-harvest.service > /etc/systemd/system/mb-harvest.service
-sed "s#__APP_DIR__#$APP_DIR#g; s#__APP_USER__#$APP_USER#g" \
-  deploy/systemd/mb-api.service     > /etc/systemd/system/mb-api.service
+echo "==> install systemd units (2 daemons + hourly harvest timer)"
+for u in mb-embed.service mb-api.service mb-harvest.service mb-harvest.timer; do
+  sed "s#__APP_DIR__#$APP_DIR#g; s#__APP_USER__#$APP_USER#g" \
+    "deploy/systemd/$u" > "/etc/systemd/system/$u"
+done
 systemctl daemon-reload
-systemctl enable --now mb-embed mb-harvest mb-api
+systemctl enable --now mb-embed mb-api          # always-on daemons
+systemctl enable --now mb-harvest.timer         # fires mb-harvest hourly
+systemctl start mb-harvest                      # kick off the first sweep now
 
 echo "==> done. status:"
 systemctl --no-pager status mb-embed mb-harvest mb-api | grep -E "Loaded|Active" || true

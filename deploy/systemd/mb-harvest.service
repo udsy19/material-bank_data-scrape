@@ -1,17 +1,14 @@
 [Unit]
-Description=Material Bank — harvest supervisor (producers, self-healing)
+Description=Material Bank — one harvest sweep (triggered hourly by mb-harvest.timer)
 After=network-online.target
 Wants=network-online.target
 
 [Service]
-Type=simple
+Type=oneshot
 User=__APP_USER__
 WorkingDirectory=__APP_DIR__
-ExecStart=/usr/bin/env bash __APP_DIR__/deploy/harvest_service.sh
-Restart=always
-RestartSec=30
+ExecStart=/usr/bin/env bash __APP_DIR__/deploy/harvest_once.sh
+# a sweep draining a giant can run long; don't let systemd kill it
+TimeoutStartSec=infinity
 StandardOutput=append:__APP_DIR__/reports/mb-harvest.log
 StandardError=append:__APP_DIR__/reports/mb-harvest.log
-
-[Install]
-WantedBy=multi-user.target

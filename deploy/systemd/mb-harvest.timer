@@ -1,0 +1,11 @@
+[Unit]
+Description=Material Bank — trigger a harvest sweep every hour
+
+[Timer]
+OnBootSec=2min
+OnUnitInactiveSec=1h
+# hourly, aligned; Persistent runs a missed sweep after downtime/reboot
+Persistent=true
+
+[Install]
+WantedBy=timers.target
