@@ -31,8 +31,12 @@ sudo -u "$APP_USER" bash -c "
   cd '$APP_DIR'
   $PY -m venv .venv
   ./.venv/bin/pip install --upgrade pip wheel
-  ./.venv/bin/pip install torch==2.12.1 --index-url https://download.pytorch.org/whl/cpu
   ./.venv/bin/pip install -r deploy/requirements.txt
+  # open_clip pulls a PyPI torchvision that mismatches a CPU torch wheel
+  # (RuntimeError: operator torchvision::nms does not exist). Install the matched
+  # CPU pair LAST with --force-reinstall so the +cpu builds win.
+  ./.venv/bin/pip install --force-reinstall --no-cache-dir \
+      torch==2.12.1 torchvision==0.27.1 --index-url https://download.pytorch.org/whl/cpu
   ./.venv/bin/playwright install chromium
   ./.venv/bin/playwright install-deps chromium 2>/dev/null || true
 "
