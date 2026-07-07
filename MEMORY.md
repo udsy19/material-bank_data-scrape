@@ -1,4 +1,11 @@
-# DSource Catalog Pipeline — Memory (living state)
+# Material Bank India — Memory (living state)
+
+## STRATEGIC PIVOT (2026-07-07) — read VISION.md
+
+- The catalog **is** the product: B2B material-intelligence platform (intelligence-first, commerce-later). Reference bar: Material Bank US (brands-pay flip, enrichment/facets) + MaterialDepot India (dual pricing, BOM, commerce). Our wedge: breadth + **cross-supplier price observations** + the trust contract (per-field provenance, completeness scores, publish gate).
+- **CLAUDE.md rewritten** for this product (new hard rules: publish gate, autonomy-first, standards-grounded taxonomy, LLM-only-adds-content/estimated). **VISION.md** holds business model, autonomy flywheel (planner turns metric gaps into pipeline_jobs stages), roadmap A–F, north-star metrics.
+- **NEXT BUILD: Phase A — Foundation of Trust**: `canonical_products` + category-specific completeness scoring + `metrics` snapshots table + QA/trust dashboard + publish gate + `mb-planner` timer. Then B (deterministic enrichment: taxonomy v1 w/ OmniClass mapping + extractors + generalized PDF mining + dual-unit prices), then C (entity resolution/golden records → price comparison), then D (LLM enrichment — **blocked on ANTHROPIC/GEMINI keys**).
+- Decisions owed by owner: API keys (Phase D), Act-1 pricing posture, product name/domain.
 
 Single source of truth for *current* state: locked decisions, status, real vs synthetic, open questions. Companion to `CLAUDE.md` (rules) and `PIPELINE.md` (the plan). Update as work lands.
 

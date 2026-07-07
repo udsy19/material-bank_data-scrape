@@ -1,74 +1,57 @@
-# DSource AI
+# Material Bank India — Autonomous Material-Intelligence Pipeline
 
-Project brief and standing direction for Claude Code. Loaded every session. Read this first, then `ROADMAP.md` (the plan), `PIPELINE.md` (the catalog/harvest pipeline), and `memory.md` (current state + open questions). The rules in `.claude/rules/` apply on top of this and outrank style preferences when they conflict.
+Project brief and standing direction for Claude Code. Loaded every session. Read this first, then `VISION.md` (strategy + roadmap), `PIPELINE.md` (harvest-stage detail), and `memory.md` (current state). Rules in `.claude/rules/` apply on top and outrank style preferences.
 
 ## What we're building
 
-**DSource AI** is a **single-user** platform — used by *both* design professionals and end-clients — that takes any interior (residential, hospitality, retail, or small workplace) from **inspiration → a real, priced, sourceable design**. India-first, architected to expand later.
+A **B2B material-intelligence platform for India**: every architectural material — tiles, laminates, sanitaryware, lighting, furniture, surfaces, hardware — as canonical, classified, enriched, provenance-tracked product records with live multi-source pricing and procurement paths. Reference bar: Material Bank (US) for enrichment/facets/trust, MaterialDepot (India) for dual-unit pricing/BOM/commerce UX. Our wedge: **intelligence-first** — breadth + data depth + a trust contract nobody else exposes (see `VISION.md` §2).
 
-It repoints the existing *DSource Studio* engine (CAD ingest, 2D/3D viewer, test-fit, wellbeing scoring, pricing connectors, procurement, ControlNet render) away from enterprise/GCC-only toward multi-typology single-user. **Not** enterprise, **not** multi-seat, **not** freemium. (Enterprise "Studio" is a separate, later track on the same engine.)
+The catalog **is** the product. It is sold via API and a faceted catalog UI to architects, designers, and procurement teams; later, suppliers claim and pay to enrich their own records (the flip).
 
-## The core architecture principle (do not violate)
+## The prime directive (do not violate)
 
-> **The structured, catalog-backed scene is the source of truth. AI is the inspiration/beauty layer on top — never the source of truth.**
-
-Two modes share one engine:
-
-1. **Explore (creative-first)** — AI generates freely → each element is **back-matched** (CLIP) to the closest real catalog product, surfaced with an explicit confidence label. The moment of inspiration.
-2. **Specify (catalog-first)** — the scene is assembled only from real SKUs → exact BOM, INR price + GST, vendor, lead time. The moment of commitment.
-
-The **back-match is the bridge** Explore → Specify. Both modes depend on the **same prerequisite: a real India catalog with image embeddings.** Build that first and "how creative vs how catalog-led" becomes a per-persona **dial**, not a rebuild (end-clients default to Explore, pros default to Specify).
+> **Every field carries its provenance, and only verified-complete records are published.** The raw harvest is an ingredient; the product is the canonical record with a trust contract: `{value, confidence, source, basis, observed_at}` on every claim, a completeness score, and a publish gate.
 
 ## Hard rules
 
-- **Never fabricate data.** A generated element with no good real match is **flagged** ("No real match"), never faked. Every estimated/missing price or field is marked as such — continue the existing `real=False` discipline. Enforce this *in the schema*: every attribute carries `{value, confidence, source/basis}` so missing/estimated is structural, not silent.
-- **Keep all existing tests green** (64 today); add tests for every new module. Bug fixes get a regression test first.
-- **Follow the existing design system** in `frontend/src/design/` — warm paper background, ink linework, single terracotta accent, Fraunces serif numerals + Inter. Do not introduce a new visual language.
-- **India-first:** prices in INR with GST; sources are Indian vendors.
-- **Free / local-first, swappable:** open models + in-process stores behind one interface; the only paid calls are the vision LLMs, and they sit behind a provider-agnostic interface (mirror `routers/render.py`). No heavy/paid infra yet.
-- **Prices are observations, not attributes.** Every price lives in `price_observation` with `basis` (`listed_mrp` / `dealer_quote` / `estimated_band`) + `observed_at` + source. MRP is labelled MRP, never "cost". Retrieval serves the freshest observation with its basis; >90-day-old prices are flagged stale.
-- **Surfaces need units.** Tiles/paint/laminates carry `price_unit` (per_sqft / per_box / per_piece / per_litre), `coverage_sqft_per_box`, `size_mm`, `finish`. BOM = area ÷ coverage → ceil boxes → +10% wastage. Never ingest a surface SKU without these (or an explicit missing flag).
-- **Registry-driven harvest.** New distributor = new row in the `suppliers` registry (domain, tier, price_published, robots status, last yield) — never a new hardcoded path. Probe before scraping; respect robots.txt; ~1 req/2s per domain; archive raw payloads content-addressed. No mass-scraping IndiaMART/Justdial; legal read before redistributing scraped dealer pricing.
-- **LLM agents in four slots only** (probe ambiguity, dedupe adjudication, parser repair, enrichment) — each with an external verification signal; everything else deterministic. A parser-repair fix ships only with a regression test against the saved fixture.
-- **No bloat.** Search before you write; modify in place; delete the old path in the same change; no parallel `_v2` files. No Airflow/Prefect — SQLite job queue + cron. See `.claude/rules/no-bloat.md`.
-- **Commit after every completed change, no AI attribution.** See `.claude/rules/git-workflow.md`.
+- **Never fabricate data.** Missing/estimated is structural (`missing[]`, `basis='estimated'`), never silent. A generated/derived value can never masquerade as a measured one. Placeholder/demo SKUs are filtered; wrong image associations are dropped (a wrong image is a fabrication).
+- **Prices are observations, not attributes.** `price_observation` with `basis` (`listed_mrp`/`dealer_quote`/`estimated_band`) + `observed_at` + source. MRP is labelled MRP, never "cost". Retrieval serves the freshest observation with its basis; >90 days ⇒ stale flag. Multi-source observations are kept side-by-side (they power price comparison — never collapsed).
+- **Surfaces need units.** Tiles/paint/laminates carry `price_unit`, `coverage_sqft_per_box`, `size_mm`, `finish` — or an explicit missing flag. Dual-unit pricing (₹/sqft ↔ ₹/sheet|box) is the target for all surfaces. BOM = area ÷ coverage → ceil → +10% wastage.
+- **Publish gate.** Only records above their category's completeness+confidence threshold are exposed to external consumers. Everything else is visibly "in enrichment", never quietly served.
+- **Autonomy-first.** Every capability ships as a durable-queue stage (`pipeline_jobs`) + systemd daemon/timer: idempotent, resumable, self-healing, metric-tracked. Nothing may depend on a live session or a human to keep running. Human review queues are accelerators, never dependencies.
+- **Registry-driven harvest.** New supplier = a `suppliers` row, never a code path (bespoke parsers go in `DOMAIN_HARVESTERS`, dispatched by the same registry). Probe before scraping; respect robots.txt; ~1 req/2s per domain (politeness is a hard rule — parallelism is across domains, never against one); archive raw payloads content-addressed. No mass-scraping IndiaMART/Justdial; legal read before redistributing dealer pricing.
+- **LLM agents only in verified slots** — probe ambiguity, dedupe adjudication, parser repair, enrichment (descriptions/features/classification), spec-PDF extraction — each with an external verification signal and a daily budget cap. LLM output may only add `content` fields or `estimated`-basis values; measured fields come from deterministic extraction only. Everything else stays deterministic.
+- **Taxonomy is standards-grounded.** Our tree maps to OmniClass/Uniclass codes; India facets use BIS/ISI standard numbers, GreenPro, GRIHA/IGBC credit relevance. No invented ontology where a standard exists.
+- **Keep all tests green** (206+ offline; browser e2e opt-in `-m browser`); every new module ships with tests; bug fixes get a regression test first. All unit tests run offline (fixtures/fakes).
+- **No bloat.** Search before writing; modify in place; delete the old path in the same change; no `_v2` files; no Airflow/Prefect — the SQLite queue + systemd timers are the orchestrator. See `.claude/rules/no-bloat.md`.
+- **Commit after every completed change, no AI attribution.**
 
-## The decided stack (free / local-first; see ROADMAP §Phase 1)
+## The system as built (schema v8, 2026-07)
 
-| Slot | Pick |
-|---|---|
-| Harvest | 4-tier `fetch_products(domain)`: Shopify `/products.json` → WooCommerce Store API → schema.org JSON-LD (+ sitemap) → Playwright, all over `curl_cffi` (impersonate chrome131) |
-| Catalog schema | Extend the existing `Product` model; add `image_url`, `price_inr`, `gst_rate`, `provenance` JSON with per-field flags |
-| Image embeddings | `Marqo/marqo-ecommerce-embeddings-B` (Apache-2.0, 768-dim, via `open_clip`) — text+image one shared space |
-| Vector store | `sqlite-vec` (`vec0` table) inside the existing `dsource.db` |
-| Enrichment | Novelty-gated router: CLIP cosine ≥~0.85 + category overlap ⇒ `gemini-2.5-flash`; novel/first-seen ⇒ `claude-haiku-4-5`; hard spec sheets ⇒ `claude-opus-4-8`. Behind a `VisionEnricher` interface. One Pydantic schema drives both providers. PDF via **pdfplumber** (MIT — never PyMuPDF/AGPL) |
-| Material → maintenance | Pure `derive_material_attributes()` over one flat `material_attributes` table; 6 standard-backed axes (Martindale/PEI/AC/Janka/GREENGUARD-CARB), each with a `basis` enum (`measured_standard`/`derived_proxy`/`estimated`) |
-| Vendor model | Three entities: `vendor` + `vendor_offering` + reuse `manufacturers.csv`; pincode serviceability via data.gov.in GODL pincode CSV + haversine. Bengaluru bootstrapped manually (20–50 vetted) |
-| Explore | FastSAM-s masks → same CLIP encoder → cosine back-match → confidence band; generation via the existing Replicate Flux proxy (canny+depth control) |
-| AR | `<model-viewer>` (MIT), curated GLB set, start with tile/paint surfaces |
-| Entity resolution | `(brand, sku)` exact upsert → brand+size+CLIP-cosine fuzzy → candidate-duplicate queue, Gemini adjudicates; merged records keep per-source price observations |
-| Retrieval | SQLite FTS5 (keyword) ∪ sqlite-vec (semantic) → rank fusion → band label + freshest price |
-| Refresh | cron; priced sources weekly, spec-only monthly; per-domain yield drift >30% ⇒ auto repair task (Claude Code subagent + fixture + regression test) |
-| Tile anchor | Orientbell first (published MRP/sqft); Kajaria/Somany/Johnson/Nitco specs-only with flagged prices, filled by Bengaluru dealer quotes |
+**Pipeline:** probe → harvest (shopify/woo/jsonld generic + bespoke Orientbell/Kajaria/Steelcase) → normalize (`build_product`: units + provenance + missing[]) → price observations → embed (marqo-ecommerce-B, one shared text+image space) → FTS5+vector hybrid retrieval → FastAPI. Self-healing: yield-drift + quarantine spikes → repair queue → re-probe → (LLM slot) parser repair.
 
-**One vector index, used three ways:** Explore back-match, Specify retrieval, and the enrichment novelty gate all share the single `sqlite-vec` index. Do not introduce a second embedding space.
+**Data:** `catalog.db` — `suppliers` (registry/control-plane) · `products` (UNIQUE(brand,sku), provenance JSON, missing[], source_url) · `price_observation` (append-only) · `embeddings` (text/image BLOB vectors) · `products_fts` (trigger-synced) · `pipeline_jobs` (durable queue: claim/retry/backoff/dead-letter) · `harvest_history` (drift signal) · `quarantine` · `schema_version`. ~142k products, 50 suppliers, ~110k priced.
 
-## Existing codebase — orient here first
+**Deployment (24/7, VPS 46.202.179.28):** systemd — `mb-harvest.timer` (hourly sweep: recover → tier-aware refresh (shopify daily/jsonld weekly/spec monthly) → drain → bespoke → self-heal) · `mb-embed` (45s consumer) · `mb-api` (uvicorn :8000) · `caddy` (HTTPS: https://46.202.179.28.sslip.io). Deploy: rsync + `systemctl restart`; runbook in `deploy/README.md`.
 
-- `backend/app/floorplan/` — `dxf_ingest.py` (DXF/DWG ingest + unit normalization), `cad_geometry.py`, `capacity.py`.
-- `backend/app/testfit/` — generative space planning (currently office-only: `rooms.py`, `zones.py`). Gate behind `typology == workplace`.
-- `backend/app/pricebook/`, `coop/`, `gsa/`, `realdata.py` — real pricing connectors (~53% real today). `realdata.py` has the **warm-cache guard** pattern to mirror.
-- `backend/app/pricing/engine.py`, `ingest/sif.py`, `ingest/service.py` — pricing/quote spine; upsert on `(manufacturer_code, sku)`; `infer_category`.
-- `backend/app/routers/render.py` — **provider-agnostic interface to mirror** for enrichment. `config.py` holds swappable model names.
-- `backend/app/procurement/models.py` — `seed_vendors` pattern to mirror for the vendor layer.
-- `data/india/manufacturers.csv` — 95 verified India suppliers (the brand registry); `data_type`/`scrape` columns drive harvest tier selection.
-- `frontend/src/Studio.tsx`, `components/CadViewer.tsx` (2D+3D; `FLOOR_MATS/WALL_MATS/FURN_MATS` palettes defined, awaiting wiring to real SKUs), `SpaceView.tsx`, `Procurement.tsx`, `design/`.
+**API:** `/api/match` (hybrid search) · `/api/products` (filtered/paginated listing) · `/api/suppliers` · `/api/product/{id}` (observations + similar) · `/api/stats` · `/api/pipeline` (queue health) · `/api/image` (proxy).
+
+**Module map:** `material_bank/` — `probe` `fetch` `sitemap` `robots` (acquisition) · `harvest/` (`run` dispatch + `worker` queue + `parallel` + generic tiers + bespoke + `images`) · `db` `models` `jobs` (spine) · `embeddings` `vectorstore` `embed_worker` (index) · `retrieval` `serve` + `static/dashboard.html` (serving) · `drift` `repair` `pipeline` (self-healing/orchestration) · `bom` (BOM math).
+
+## What we're building next (roadmap in VISION.md §7)
+
+- **Phase A — Foundation of Trust:** `canonical_products` + category-specific completeness scoring + `metrics` snapshots + QA/trust dashboard + publish gate + `mb-planner` (turns measured gaps into prioritized queue jobs — the flywheel).
+- **Phase B — Deterministic Enrichment:** taxonomy v1 + attribute extractors (title/description, controlled vocab) + generalized PDF spec-mining + dual-unit price normalization + image color-family.
+- **Phase C — One Product, One Truth:** entity resolution → golden records → cross-supplier price comparison.
+- **Phase D — Intelligence at Scale:** LLM enrichment daemon (novelty-gated, budget-capped, verified). *Blocked on API keys.*
+- **Phase E — Procurement Product:** BOM calculators, serviceability, RFQ, API productization.
+- **Phase F — The Flip:** supplier portal, discovery to 500+ suppliers, media generation, visual search, BIM export.
 
 ## Working method
 
-1. Explore the repo and search for existing implementations before writing new code.
-2. Post a short written plan (files to add/change, schema, test list). **Wait for confirmation before starting a new phase.**
-3. Implement in small, reviewable commits; run tests after each; commit per the git-workflow rule.
-4. Keep `memory.md` updated as decisions land and status changes.
-
-Stack rationale and citations live in the research synthesis referenced from `memory.md`.
+1. Search the repo before writing anything new; extend in place (no-bloat).
+2. TDD: failing test → implement → green; validate live on a small sample before any large run; iterate on real defects found (they're the best tests).
+3. Long work runs as background jobs / VPS services — never block on a session. Every long job is resumable (`source_url`, queue claims) and safe to kill.
+4. Ship in small commits; run the full suite each time; deploy = rsync + restart; verify on the VPS after deploy.
+5. Keep `memory.md` current (state, decisions, honest gaps) — it is the cross-session brain.
+6. Data honesty beats data volume. When a source is ambiguous: flag, quarantine, or skip — never guess.
