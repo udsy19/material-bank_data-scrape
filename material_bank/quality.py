@@ -94,30 +94,32 @@ LEFT JOIN (
 """
 
 
-def score_all(conn: sqlite3.Connection, *, batch: int = 5000) -> dict:
-    """Score every product; write completeness/tier/publish_ready. Idempotent."""
+def score_all(conn: sqlite3.Connection, *, batch: int = 20000) -> dict:
+    """Score every product; write completeness/tier/publish_ready. Idempotent.
+
+    NB: the read is fully materialized BEFORE any write. Interleaving writes
+    into an open read cursor on the same connection triggers SQLITE_BUSY_SNAPSHOT
+    under WAL the moment any other process (embed/harvest) writes — and that
+    error bypasses busy_timeout by design. Read-then-write avoids it.
+    """
     ts = now_iso()
+    rows = conn.execute(_SCORE_QUERY).fetchall()   # complete the read snapshot
     updates, summary = [], {"scored": 0, "publish_ready": 0,
                             "tiers": {"unverified": 0, "auto_validated": 0,
                                       "reviewed": 0, "golden": 0}}
-    cur = conn.execute(_SCORE_QUERY)
-    while True:
-        rows = cur.fetchmany(batch)
-        if not rows:
-            break
-        for row in rows:
-            completeness, surface = score_row(row, row["price_age"])
-            tier = tier_row(row)
-            ready = publish_gate(completeness, tier, surface)
-            updates.append((completeness, tier, int(ready), ts, row["id"]))
-            summary["scored"] += 1
-            summary["publish_ready"] += int(ready)
-            summary["tiers"][tier] = summary["tiers"].get(tier, 0) + 1
+    for row in rows:
+        completeness, surface = score_row(row, row["price_age"])
+        tier = tier_row(row)
+        ready = publish_gate(completeness, tier, surface)
+        updates.append((completeness, tier, int(ready), ts, row["id"]))
+        summary["scored"] += 1
+        summary["publish_ready"] += int(ready)
+        summary["tiers"][tier] = summary["tiers"].get(tier, 0) + 1
+    for i in range(0, len(updates), batch):        # short write txns, busy_timeout applies
         conn.executemany(
             "UPDATE products SET completeness=?, verification_tier=?, "
-            "publish_ready=?, scored_at=? WHERE id=?", updates)
+            "publish_ready=?, scored_at=? WHERE id=?", updates[i:i + batch])
         conn.commit()
-        updates.clear()
     return summary
 
 
