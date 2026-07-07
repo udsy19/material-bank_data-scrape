@@ -1,0 +1,17 @@
+[Unit]
+Description=Material Bank — search API + dashboard
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=__APP_USER__
+WorkingDirectory=__APP_DIR__
+ExecStart=__APP_DIR__/.venv/bin/python -m uvicorn material_bank.serve:app --host 0.0.0.0 --port 8000
+Restart=always
+RestartSec=10
+StandardOutput=append:__APP_DIR__/reports/mb-api.log
+StandardError=append:__APP_DIR__/reports/mb-api.log
+
+[Install]
+WantedBy=multi-user.target

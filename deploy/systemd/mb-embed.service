@@ -1,0 +1,19 @@
+[Unit]
+Description=Material Bank — continuous embedding worker (consumer)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=__APP_USER__
+WorkingDirectory=__APP_DIR__
+ExecStart=__APP_DIR__/.venv/bin/python -m material_bank.embed_worker --poll 45
+Restart=always
+RestartSec=10
+# CPU embedding is heavy; keep it nice so harvest + API stay responsive
+Nice=5
+StandardOutput=append:__APP_DIR__/reports/mb-embed.log
+StandardError=append:__APP_DIR__/reports/mb-embed.log
+
+[Install]
+WantedBy=multi-user.target

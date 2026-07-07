@@ -1,0 +1,17 @@
+[Unit]
+Description=Material Bank — harvest supervisor (producers, self-healing)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=__APP_USER__
+WorkingDirectory=__APP_DIR__
+ExecStart=/usr/bin/env bash __APP_DIR__/deploy/harvest_service.sh
+Restart=always
+RestartSec=30
+StandardOutput=append:__APP_DIR__/reports/mb-harvest.log
+StandardError=append:__APP_DIR__/reports/mb-harvest.log
+
+[Install]
+WantedBy=multi-user.target
