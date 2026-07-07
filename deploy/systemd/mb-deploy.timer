@@ -1,0 +1,10 @@
+[Unit]
+Description=Material Bank — check GitHub for new code every 5 minutes
+
+[Timer]
+OnBootSec=3min
+OnUnitInactiveSec=5min
+Persistent=true
+
+[Install]
+WantedBy=timers.target

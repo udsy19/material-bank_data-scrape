@@ -7,6 +7,7 @@ Wants=network-online.target
 Type=oneshot
 User=__APP_USER__
 WorkingDirectory=__APP_DIR__
+EnvironmentFile=-__APP_DIR__/.env
 ExecStart=/usr/bin/env bash __APP_DIR__/deploy/harvest_once.sh
 # a sweep draining a giant can run long; don't let systemd kill it
 TimeoutStartSec=infinity

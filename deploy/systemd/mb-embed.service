@@ -7,6 +7,7 @@ Wants=network-online.target
 Type=simple
 User=__APP_USER__
 WorkingDirectory=__APP_DIR__
+EnvironmentFile=-__APP_DIR__/.env
 ExecStart=__APP_DIR__/.venv/bin/python -m material_bank.embed_worker --poll 45
 Restart=always
 RestartSec=10

@@ -1,0 +1,14 @@
+[Unit]
+Description=Material Bank — verified backup to GitHub (vps-backups branch)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=__APP_USER__
+WorkingDirectory=__APP_DIR__
+EnvironmentFile=-__APP_DIR__/.env
+ExecStart=/usr/bin/env bash __APP_DIR__/deploy/backup_once.sh
+TimeoutStartSec=3600
+StandardOutput=append:__APP_DIR__/reports/mb-backup.log
+StandardError=append:__APP_DIR__/reports/mb-backup.log

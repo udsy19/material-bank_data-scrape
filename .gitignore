@@ -11,3 +11,7 @@ __pycache__/
 *.egg-info/
 # reports (generated)
 reports/
+# secrets — never commit
+.env
+# local db backups
+data/backups/
