@@ -85,6 +85,29 @@ def test_requeue_stale_running(conn):
     assert jobs.claim(conn, "harvest")["id"] == job["id"]  # reclaimable
 
 
+def test_enqueue_due_refreshes_by_cadence(conn):
+    from datetime import timedelta
+    now = _now()
+    old = (now - timedelta(days=40)).isoformat()
+    recent = (now - timedelta(days=3)).isoformat()
+    # priced supplier harvested 40d ago -> due (weekly); spec supplier 40d -> due (monthly)
+    # priced supplier harvested 3d ago -> NOT due
+    for dom, priced, lh in [("priced_old.com", "yes", old), ("priced_new.com", "yes", recent),
+                            ("spec_old.com", "no", old), ("spec_recent.com", "no", recent)]:
+        conn.execute("INSERT INTO suppliers(brand,domain,status,scrape_tier,price_published,last_harvest) "
+                     "VALUES(?,?,?,?,?,?)", (dom, dom, "active", "shopify", priced, lh))
+        jobs.enqueue(conn, "harvest", dom)
+        j = jobs.claim(conn, "harvest"); jobs.complete(conn, j["id"])  # mark done
+    conn.commit()
+
+    n = jobs.enqueue_due_refreshes(conn, priced_days=7, spec_days=30, now=now)
+    assert n == 2  # priced_old (7d window) + spec_old (30d window)
+    pending = {r[0] for r in conn.execute("SELECT target FROM pipeline_jobs WHERE status='pending'")}
+    assert pending == {"priced_old.com", "spec_old.com"}
+    # spec_recent (3d < 30d) and priced_new (3d < 7d) stay done -> cheap sweep
+    assert conn.execute("SELECT COUNT(*) FROM pipeline_jobs WHERE status='done'").fetchone()[0] == 2
+
+
 def test_reset_rearms_done_job(conn):
     jobs.enqueue(conn, "harvest", "a.com")
     j = jobs.claim(conn, "harvest"); jobs.complete(conn, j["id"])

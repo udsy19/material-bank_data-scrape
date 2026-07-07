@@ -115,3 +115,94 @@ def top_suppliers(conn: sqlite3.Connection, limit: int = 12) -> list[dict]:
     return [dict(r) for r in conn.execute(
         "SELECT supplier_domain AS domain, COUNT(*) AS products FROM products "
         "GROUP BY supplier_domain ORDER BY products DESC LIMIT ?", (limit,))]
+
+
+def list_suppliers(conn: sqlite3.Connection) -> list[dict]:
+    """Every supplier that has products, with counts + registry metadata."""
+    return [dict(r) for r in conn.execute(
+        """
+        SELECT p.supplier_domain AS domain,
+               COALESCE(s.brand, p.supplier_domain) AS brand,
+               s.scrape_tier AS tier, s.categories,
+               COUNT(*) AS products,
+               COUNT(DISTINCT po.product_id) AS priced,
+               COUNT(DISTINCT CASE WHEN p.image_url IS NOT NULL THEN p.id END) AS with_image
+        FROM products p
+        LEFT JOIN suppliers s ON s.domain = p.supplier_domain
+        LEFT JOIN price_observation po ON po.product_id = p.id
+        GROUP BY p.supplier_domain
+        ORDER BY products DESC
+        """)]
+
+
+# Columns safe to expose/order by in the products query.
+_LIST_ORDER = {"id": "p.id", "price": "l.price_inr", "title": "p.title", "brand": "p.brand"}
+
+
+def list_products(
+    conn: sqlite3.Connection,
+    *,
+    supplier: str | None = None,
+    category: str | None = None,
+    brand: str | None = None,
+    q: str | None = None,
+    priced: bool | None = None,
+    has_image: bool | None = None,
+    min_price: float | None = None,
+    max_price: float | None = None,
+    order: str = "id",
+    desc: bool = False,
+    limit: int = 50,
+    offset: int = 0,
+) -> dict:
+    """Filtered, paginated product listing with the freshest price attached.
+
+    Returns {total, count, limit, offset, items}. All filters are parameterized.
+    """
+    limit = max(1, min(int(limit), 200))
+    offset = max(0, int(offset))
+    where: list[str] = []
+    params: list = []
+    if supplier:
+        where.append("p.supplier_domain = ?"); params.append(supplier)
+    if brand:
+        where.append("p.brand = ?"); params.append(brand)
+    if category:
+        where.append("p.category LIKE ?"); params.append(f"%{category}%")
+    if q:
+        where.append("p.title LIKE ?"); params.append(f"%{q}%")
+    if has_image is True:
+        where.append("p.image_url IS NOT NULL")
+    elif has_image is False:
+        where.append("p.image_url IS NULL")
+    if priced is True:
+        where.append("l.price_inr IS NOT NULL")
+    elif priced is False:
+        where.append("l.price_inr IS NULL")
+    if min_price is not None:
+        where.append("l.price_inr >= ?"); params.append(float(min_price))
+    if max_price is not None:
+        where.append("l.price_inr <= ?"); params.append(float(max_price))
+    clause = ("WHERE " + " AND ".join(where)) if where else ""
+
+    # freshest price per product via a grouped subquery
+    base = f"""
+        FROM products p
+        LEFT JOIN (
+            SELECT product_id, price_inr, price_unit, basis,
+                   ROW_NUMBER() OVER (PARTITION BY product_id ORDER BY observed_at DESC) rn
+            FROM price_observation
+        ) l ON l.product_id = p.id AND l.rn = 1
+        {clause}
+    """
+    total = conn.execute(f"SELECT COUNT(*) {base}", params).fetchone()[0]
+    order_col = _LIST_ORDER.get(order, "p.id")
+    direction = "DESC" if desc else "ASC"
+    rows = conn.execute(
+        f"""SELECT p.id, p.brand, p.title, p.category, p.size_mm, p.finish,
+                   p.price_unit, p.coverage_sqft_per_box, p.image_url, p.source_url,
+                   p.supplier_domain, l.price_inr, l.basis AS price_basis
+            {base} ORDER BY {order_col} {direction}, p.id LIMIT ? OFFSET ?""",
+        [*params, limit, offset]).fetchall()
+    return {"total": total, "count": len(rows), "limit": limit, "offset": offset,
+            "items": [dict(r) for r in rows]}

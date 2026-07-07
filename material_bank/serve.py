@@ -14,7 +14,14 @@ from fastapi import FastAPI, HTTPException, Query
 from fastapi.responses import HTMLResponse, Response
 
 from . import db, jobs
-from .retrieval import freshest_price, hybrid_search, stats, top_suppliers
+from .retrieval import (
+    freshest_price,
+    hybrid_search,
+    list_products,
+    list_suppliers,
+    stats,
+    top_suppliers,
+)
 from .vectorstore import NumpyVectorStore
 
 _STATIC = Path(__file__).resolve().parent / "static"
@@ -66,6 +73,36 @@ def create_app(state_provider) -> FastAPI:
         with lock:
             results = hybrid_search(s["conn"], s["embedder"], s["store"], q, k=k)
         return {"query": q, "count": len(results), "results": results}
+
+    @app.get("/api/products")
+    def api_products(
+        supplier: str | None = None,
+        category: str | None = None,
+        brand: str | None = None,
+        q: str | None = None,
+        priced: bool | None = None,
+        has_image: bool | None = None,
+        min_price: float | None = None,
+        max_price: float | None = None,
+        order: str = Query("id", pattern="^(id|price|title|brand)$"),
+        desc: bool = False,
+        limit: int = Query(50, ge=1, le=200),
+        offset: int = Query(0, ge=0),
+    ) -> dict:
+        """Filtered, paginated catalog listing (structured retrieval, not search)."""
+        s = S()
+        with lock:
+            return list_products(s["conn"], supplier=supplier, category=category, brand=brand,
+                                 q=q, priced=priced, has_image=has_image, min_price=min_price,
+                                 max_price=max_price, order=order, desc=desc,
+                                 limit=limit, offset=offset)
+
+    @app.get("/api/suppliers")
+    def api_suppliers() -> dict:
+        s = S()
+        with lock:
+            sup = list_suppliers(s["conn"])
+        return {"count": len(sup), "suppliers": sup}
 
     @app.get("/api/product/{pid}")
     def api_product(pid: int) -> dict:

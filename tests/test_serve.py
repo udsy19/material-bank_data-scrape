@@ -98,3 +98,37 @@ def test_pipeline_health_endpoint(client):
     assert "jobs" in d and "dead_letters" in d
     for s in ("pending", "running", "done", "failed"):
         assert s in d["jobs"]
+
+
+def test_products_listing_and_filters(client):
+    d = client.get("/api/products", params={"limit": 10}).json()
+    assert d["total"] == 3 and len(d["items"]) == 3
+    assert {"id", "title", "supplier_domain", "price_inr"} <= set(d["items"][0])
+    # filter by supplier
+    r = client.get("/api/products", params={"supplier": "orientbell.com"}).json()
+    assert r["total"] == 1 and r["items"][0]["title"] == "Emperador Marble Glossy"
+    # filter by category substring
+    assert client.get("/api/products", params={"category": "lighting"}).json()["total"] == 1
+    # price range
+    hi = client.get("/api/products", params={"min_price": 50000}).json()
+    assert all(i["price_inr"] >= 50000 for i in hi["items"]) and hi["total"] == 2
+
+
+def test_products_pagination(client):
+    p1 = client.get("/api/products", params={"limit": 2, "offset": 0}).json()
+    p2 = client.get("/api/products", params={"limit": 2, "offset": 2}).json()
+    assert p1["total"] == 3 and len(p1["items"]) == 2 and len(p2["items"]) == 1
+    assert {i["id"] for i in p1["items"]}.isdisjoint({i["id"] for i in p2["items"]})
+
+
+def test_products_order_by_price(client):
+    d = client.get("/api/products", params={"order": "price", "desc": True}).json()
+    prices = [i["price_inr"] for i in d["items"] if i["price_inr"] is not None]
+    assert prices == sorted(prices, reverse=True)
+
+
+def test_suppliers_endpoint(client):
+    d = client.get("/api/suppliers").json()
+    assert d["count"] == 3
+    doms = {s["domain"]: s for s in d["suppliers"]}
+    assert doms["orientbell.com"]["products"] == 1 and doms["orientbell.com"]["priced"] == 1

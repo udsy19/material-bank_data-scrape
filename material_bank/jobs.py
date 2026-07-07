@@ -109,6 +109,28 @@ def fail(conn: sqlite3.Connection, job_id: int, error: str, *,
     return status
 
 
+def enqueue_due_refreshes(conn: sqlite3.Connection, *, priced_days: int = 7,
+                          spec_days: int = 30, now: datetime | None = None) -> int:
+    """Re-arm harvest jobs for suppliers due a refresh (PIPELINE.md cadence:
+    priced sources weekly, spec-only monthly). Only 'done' jobs whose supplier's
+    last_harvest is past its window are reset — everything else is left alone, so
+    routine sweeps stay cheap and only re-fetch what's actually stale."""
+    ref = now or _now()
+    priced_cut = (ref - timedelta(days=priced_days)).isoformat()
+    spec_cut = (ref - timedelta(days=spec_days)).isoformat()
+    due = conn.execute(
+        """
+        SELECT j.target FROM pipeline_jobs j
+        JOIN suppliers s ON s.domain = j.target
+        WHERE j.stage='harvest' AND j.status='done' AND s.last_harvest IS NOT NULL
+          AND ( (s.price_published='yes'                 AND s.last_harvest < ?)
+             OR (COALESCE(s.price_published,'') != 'yes' AND s.last_harvest < ?) )
+        """, (priced_cut, spec_cut)).fetchall()
+    for r in due:
+        enqueue(conn, "harvest", r[0], reset=True)
+    return len(due)
+
+
 def retry_dead(conn: sqlite3.Connection, stage: str | None = None) -> int:
     """Re-arm dead-lettered (failed) jobs for another attempt cycle."""
     ts = now_iso()
