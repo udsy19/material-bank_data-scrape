@@ -26,7 +26,7 @@ if [ "$REQ_BEFORE" != "$REQ_AFTER" ]; then
     torch==2.12.1 torchvision==0.27.1 --index-url https://download.pytorch.org/whl/cpu
 fi
 
-# unit files changed? re-render + daemon-reload
+# unit files changed? re-render + daemon-reload + enable any new timers
 UNITS_AFTER=$(cat deploy/systemd/* 2>/dev/null | md5sum | cut -d' ' -f1)
 if [ "$UNITS_BEFORE" != "$UNITS_AFTER" ]; then
   echo "[deploy] systemd units changed -> reinstall"
@@ -34,6 +34,9 @@ if [ "$UNITS_BEFORE" != "$UNITS_AFTER" ]; then
     sed "s#__APP_DIR__#$APP_DIR#g; s#__APP_USER__#mb#g" "$u" > "/etc/systemd/system/$(basename "$u")"
   done
   systemctl daemon-reload
+  for t in deploy/systemd/*.timer; do
+    systemctl enable --now "$(basename "$t")" 2>/dev/null || true
+  done
 fi
 
 systemctl restart mb-api mb-embed   # harvest is a oneshot timer: next tick uses new code

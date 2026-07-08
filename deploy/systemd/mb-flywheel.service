@@ -1,0 +1,14 @@
+[Unit]
+Description=Material Bank — flywheel tick (extract -> score -> seed -> enrich)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=__APP_USER__
+WorkingDirectory=__APP_DIR__
+EnvironmentFile=-__APP_DIR__/.env
+ExecStart=/usr/bin/env bash __APP_DIR__/deploy/flywheel_once.sh
+TimeoutStartSec=7200
+StandardOutput=append:__APP_DIR__/reports/mb-flywheel.log
+StandardError=append:__APP_DIR__/reports/mb-flywheel.log

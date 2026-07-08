@@ -41,13 +41,6 @@ print("[harvest] self-heal:", drift.scan_and_open(c))
 print("[harvest] repairs:", repair.drain_repairs())
 EOF
 
-# 5) free enrichment win: extract attributes from titles (NULL-only, derived)
-$PY -m material_bank.enrich --title-pass || echo "[harvest] title-pass failed (non-fatal)"
-
-# 6) the planner: re-score the trust contract, snapshot, seed enrich jobs from gaps
-$PY -m material_bank.planner || echo "[harvest] planner failed (non-fatal)"
-
-# 7) drain enrichment: re-fetch below-gate PDPs (400/supplier/sweep, polite)
-$PY -m material_bank.enrich --drain --limit 400 --workers 4 || echo "[harvest] enrich drain failed (non-fatal)"
-
+# NB: scoring/enrichment live in mb-flywheel (own timer) — a giant crawl here
+# must never starve them (day-1 autonomy lesson).
 echo "[harvest] sweep done"

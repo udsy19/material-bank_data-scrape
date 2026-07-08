@@ -1,0 +1,10 @@
+[Unit]
+Description=Material Bank — flywheel tick every 45 minutes
+
+[Timer]
+OnBootSec=5min
+OnUnitInactiveSec=45min
+Persistent=true
+
+[Install]
+WantedBy=timers.target
