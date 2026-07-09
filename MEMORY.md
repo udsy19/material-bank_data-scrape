@@ -20,7 +20,12 @@
 
 - **Schema v10** (description, color, color_family, thickness_mm, enriched_at). `extract.py`: conservative extractors (size w/ ft/in/cm→mm; bare NxM only at mm scale; finish vocab; color→family; sheet-coverage derivation). `enrich.py`: title_pass (every sweep, free) + `enrich` queue stage (per-supplier PDP refetch, 400/supplier/sweep, ld+json description/additionalProperty, enriched_at resume marker). NULL-only COALESCE writes — **harvested values never overwritten**; everything `basis='derived'` with source `extracted:title|pdp`.
 - **First live run:** title-pass filled **129,160 fields on 70,343 products in 10s** (+555 over the gate). Refetch loop proven 8/8 jobs: Somany finish 0→254, descriptions storing. **Flywheel closes its first full loop: measure → seed → enrich → re-score, hourly, unattended.**
-- **Honest finding:** the stubborn gap categories have bare titles AND thin ld+json (Somany size yield low; Kajaria PDPs JS-rendered) — the remaining lift needs **generalized PDF spec-mining (Somany/Nitco tech sheets) + Playwright-rendered extraction**, which is the next Phase B chunk. Also owed: taxonomy v1 (OmniClass mapping), dual-unit price serving, image color-family.
+- **Honest finding:** the stubborn gap categories have bare titles AND thin ld+json (Somany size yield low; Kajaria PDPs JS-rendered) — the remaining lift needs **generalized PDF spec-mining (Somany/Nitco tech sheets) + Playwright-rendered extraction**, which is the next Phase B chunk. Owed: dual-unit price serving, image color-family.
+
+## Phase B — Taxonomy v1: LIVE (2026-07-08)
+
+- **Schema v11** (products.family/category_std/omniclass/classified_at + idx_products_family). `taxonomy.py`: ordered `RULES` classifier (specific-before-general: plants>furniture, mattress/sofa>furniture, laminate>cladding/flooring, fan>lighting), `classify(category,title)` with title fallback, idempotent `classify_all` (read-then-write, front-loaded in `run_planner` before scoring), `taxonomy_tree` (family→categories w/ counts + publish_ready). **Verified OmniClass Table 23 only** (tiles 23-35 50 14, sanitaryware 23-45 05 14, furniture 23-40 20 00, laminate/wallpaper 23-35 10 00, flooring 23-35 50 00); lighting/quartz/plants left `null` — not fabricated.
+- **Live over 159,539 products → 10 families, only 10 unmatched (0.006% "Other")**: Furniture 57.7k · Surfaces 55.0k · Flooring 26.7k · Lighting&Electrical 8.8k · Decor&Greenery 6.9k · Bath&Sanitary 2.9k. `/api/taxonomy` tree endpoint + `family`/`category_std` filters on `/api/products` + `/api/catalog`. Full suite **237 green**.
 
 ## CI/CD + durability (2026-07-07)
 
