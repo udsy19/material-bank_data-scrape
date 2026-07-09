@@ -150,6 +150,8 @@ def list_products(
     *,
     supplier: str | None = None,
     category: str | None = None,
+    family: str | None = None,
+    category_std: str | None = None,
     brand: str | None = None,
     q: str | None = None,
     priced: bool | None = None,
@@ -176,6 +178,10 @@ def list_products(
         where.append("p.brand = ?"); params.append(brand)
     if category:
         where.append("p.category LIKE ?"); params.append(f"%{category}%")
+    if family:
+        where.append("p.family = ?"); params.append(family)
+    if category_std:
+        where.append("p.category_std = ?"); params.append(category_std)
     if q:
         where.append("p.title LIKE ?"); params.append(f"%{q}%")
     if has_image is True:
@@ -213,7 +219,8 @@ def list_products(
         f"""SELECT p.id, p.brand, p.title, p.category, p.size_mm, p.finish,
                    p.price_unit, p.coverage_sqft_per_box, p.image_url, p.source_url,
                    p.supplier_domain, l.price_inr, l.basis AS price_basis,
-                   p.completeness, p.verification_tier, p.publish_ready
+                   p.completeness, p.verification_tier, p.publish_ready,
+                   p.family, p.category_std, p.omniclass
             {base} ORDER BY {order_col} {direction}, p.id LIMIT ? OFFSET ?""",
         [*params, limit, offset]).fetchall()
     return {"total": total, "count": len(rows), "limit": limit, "offset": offset,

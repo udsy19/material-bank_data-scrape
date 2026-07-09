@@ -155,3 +155,18 @@ def test_quality_endpoint_shape(client):
     for k in ("products", "publish_ready", "median_completeness", "tiers", "trend"):
         assert k in q
     assert q["products"] == 3
+
+
+def test_taxonomy_endpoint_and_family_filter(client):
+    from material_bank.taxonomy import classify_all
+    classify_all(client.conn)
+    tree = client.get("/api/taxonomy").json()
+    fams = {f["family"] for f in tree["families"]}
+    assert {"Surfaces", "Flooring", "Lighting & Electrical"} <= fams
+    # the fixture's tile is under Surfaces/Tiles
+    surf = next(f for f in tree["families"] if f["family"] == "Surfaces")
+    assert any(c["category"] == "Tiles" and c["omniclass"] == "23-35 50 14"
+               for c in surf["categories"])
+    # filter products by canonical family
+    d = client.get("/api/products", params={"family": "Surfaces"}).json()
+    assert d["total"] == 1 and d["items"][0]["family"] == "Surfaces"

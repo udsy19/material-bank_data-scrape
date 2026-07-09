@@ -19,7 +19,7 @@ from urllib.parse import urlparse
 
 from .models import NormalizedProduct, PriceObservation, Supplier
 
-SCHEMA_VERSION = 10
+SCHEMA_VERSION = 11
 
 _REPO_ROOT = Path(__file__).resolve().parent.parent
 DEFAULT_DB_PATH = _REPO_ROOT / "data" / "catalog.db"
@@ -276,6 +276,16 @@ _MIGRATIONS = (
         ALTER TABLE products ADD COLUMN enriched_at TEXT;
         """,
      "enrichment fields: description, color(+family), thickness, enriched_at"),
+    # Phase B: canonical taxonomy on the product (freeform `category` kept as
+    # provenance). OmniClass code where verified, else NULL.
+    (11, """
+        ALTER TABLE products ADD COLUMN family TEXT;
+        ALTER TABLE products ADD COLUMN category_std TEXT;
+        ALTER TABLE products ADD COLUMN omniclass TEXT;
+        ALTER TABLE products ADD COLUMN classified_at TEXT;
+        CREATE INDEX IF NOT EXISTS idx_products_family ON products(family, category_std);
+        """,
+     "canonical taxonomy: family / category_std / omniclass"),
 )
 
 

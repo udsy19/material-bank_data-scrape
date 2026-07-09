@@ -78,6 +78,8 @@ def create_app(state_provider) -> FastAPI:
     def api_products(
         supplier: str | None = None,
         category: str | None = None,
+        family: str | None = None,
+        category_std: str | None = None,
         brand: str | None = None,
         q: str | None = None,
         priced: bool | None = None,
@@ -94,6 +96,7 @@ def create_app(state_provider) -> FastAPI:
         s = S()
         with lock:
             return list_products(s["conn"], supplier=supplier, category=category, brand=brand,
+                                 family=family, category_std=category_std,
                                  q=q, priced=priced, has_image=has_image, min_price=min_price,
                                  max_price=max_price, publish_ready=publish_ready,
                                  order=order, desc=desc, limit=limit, offset=offset)
@@ -102,6 +105,8 @@ def create_app(state_provider) -> FastAPI:
     def api_catalog(
         supplier: str | None = None,
         category: str | None = None,
+        family: str | None = None,
+        category_std: str | None = None,
         brand: str | None = None,
         q: str | None = None,
         min_price: float | None = None,
@@ -115,9 +120,19 @@ def create_app(state_provider) -> FastAPI:
         s = S()
         with lock:
             return list_products(s["conn"], supplier=supplier, category=category, brand=brand,
+                                 family=family, category_std=category_std,
                                  q=q, min_price=min_price, max_price=max_price,
                                  publish_ready=True, order=order, desc=desc,
                                  limit=limit, offset=offset)
+
+    @app.get("/api/taxonomy")
+    def api_taxonomy() -> dict:
+        """The canonical tree with live counts — powers faceted browse."""
+        from .taxonomy import taxonomy_tree
+        s = S()
+        with lock:
+            tree = taxonomy_tree(s["conn"])
+        return {"families": tree, "family_count": len(tree)}
 
     @app.get("/api/quality")
     def api_quality() -> dict:
