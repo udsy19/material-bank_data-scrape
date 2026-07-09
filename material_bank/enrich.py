@@ -3,7 +3,9 @@
 Two passes, both idempotent and NULL-only (a harvested/measured value is never
 overwritten by a derived one — hard rule):
 
-  1. title_pass  — free win: run the extractors over every product's title.
+  1. text_pass   — free win, no network: run the extractors over every product's
+     title AND its already-harvested description (the same extraction the PDP
+     path applies to fetched descriptions, minus the fetch).
   2. refetch     — queue-driven (stage='enrich', one job per supplier): re-fetch
      below-gate products' PDPs (politely, per-domain rate limit), extract from
      title + ld+json description/additionalProperty, store the description for
@@ -71,14 +73,19 @@ _ROW_COLS = ("id, title, category, size_mm, finish, color, color_family, "
              "thickness_mm, coverage_sqft_per_box, provenance, missing")
 
 
-def title_pass(conn: sqlite3.Connection, *, batch: int = 20000) -> dict:
-    """Extract from titles for every product still missing a target field."""
+def text_pass(conn: sqlite3.Connection, *, batch: int = 20000) -> dict:
+    """Extract from title + stored description for every product still missing a
+    target field. Offline, idempotent, NULL-only — mines the descriptions we've
+    already harvested (title-first so a title value wins ties)."""
     rows = conn.execute(  # read fully BEFORE writing (WAL BUSY_SNAPSHOT rule)
-        f"SELECT {_ROW_COLS} FROM products WHERE size_mm IS NULL OR finish IS NULL "
-        f"OR color IS NULL OR thickness_mm IS NULL").fetchall()
+        f"SELECT {_ROW_COLS}, description FROM products WHERE size_mm IS NULL "
+        f"OR finish IS NULL OR color IS NULL OR thickness_mm IS NULL").fetchall()
     updates, fields_filled = [], 0
     for row in rows:
-        result = _apply_extraction(row, row["title"] or "", source="extracted:title")
+        text = row["title"] or ""
+        if row["description"]:
+            text = f"{text} | {row['description']}"
+        result = _apply_extraction(row, text, source="extracted:text")
         if result:
             updates.append(result[0])
             fields_filled += result[1]
@@ -200,7 +207,7 @@ def main(argv=None) -> int:
     import sys
 
     ap = argparse.ArgumentParser(prog="mb-enrich")
-    ap.add_argument("--title-pass", action="store_true")
+    ap.add_argument("--text-pass", action="store_true")
     ap.add_argument("--seed", action="store_true")
     ap.add_argument("--drain", action="store_true")
     ap.add_argument("--limit", type=int, default=400, help="PDP refetches per job per drain")
@@ -210,8 +217,8 @@ def main(argv=None) -> int:
 
     conn = db.connect(args.db)
     db.migrate(conn)
-    if args.title_pass:
-        print(f"[enrich] title-pass: {title_pass(conn)}", file=sys.stderr)
+    if args.text_pass:
+        print(f"[enrich] text-pass: {text_pass(conn)}", file=sys.stderr)
     if args.seed:
         print(f"[enrich] seeded {seed_enrich_jobs(conn)} supplier jobs", file=sys.stderr)
     conn.close()

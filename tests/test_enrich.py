@@ -25,10 +25,10 @@ def _add(conn, sku, title, category="tiles", supplier="somanyceramics.com", **kw
     return db_mod.upsert_product(conn, p, supplier_domain=supplier)
 
 
-def test_title_pass_fills_null_only_with_provenance(conn):
+def test_text_pass_fills_null_only_with_provenance(conn):
     pid = _add(conn, "t1", "Emperador Marble 600x600 Glossy Grey tile")
     already = _add(conn, "t2", "Rustic 300x300 tile", size_mm="605x605", finish="Sugar")
-    out = enrich.title_pass(conn)
+    out = enrich.text_pass(conn)
     assert out["products_updated"] >= 1
 
     r = conn.execute("SELECT * FROM products WHERE id=?", (pid,)).fetchone()
@@ -36,21 +36,39 @@ def test_title_pass_fills_null_only_with_provenance(conn):
     assert r["color"] == "Grey" and r["color_family"] == "Grey"
     prov = json.loads(r["provenance"])
     assert prov["size_mm"]["basis"] == "derived"
-    assert prov["size_mm"]["source"] == "extracted:title"
+    assert prov["size_mm"]["source"] == "extracted:text"
     assert "size_mm" not in json.loads(r["missing"])   # honest gap closed
 
     r2 = conn.execute("SELECT * FROM products WHERE id=?", (already,)).fetchone()
     assert r2["size_mm"] == "605x605" and r2["finish"] == "Sugar"  # harvested wins
 
 
-def test_title_pass_derives_sheet_coverage_for_laminates(conn):
+def test_text_pass_derives_sheet_coverage_for_laminates(conn):
     pid = _add(conn, "lam1", "Walnut High Gloss Laminate 8 ft x 4 ft - 1mm",
                category="laminates|acrylic")
-    enrich.title_pass(conn)
+    enrich.text_pass(conn)
     r = conn.execute("SELECT * FROM products WHERE id=?", (pid,)).fetchone()
     assert r["size_mm"] == "2438x1219"
     assert r["coverage_sqft_per_box"] == pytest.approx(32.0, abs=0.05)
     assert r["thickness_mm"] == 1.0
+
+
+def test_text_pass_mines_stored_description(conn):
+    # bare title, but the harvested description carries the specs (the real
+    # laminate case: 66% have descriptions, 0% had size before this pass)
+    pid = _add(conn, "lam2", "Marino Decorative Laminate", category="laminates|acrylic")
+    conn.execute("UPDATE products SET description=? WHERE id=?", (
+        "Premium suede-finish laminate sheet, size 8 ft x 4 ft, 1mm thick, "
+        "walnut wood grain for wardrobes.", pid))
+    conn.commit()
+    out = enrich.text_pass(conn)
+    assert out["products_updated"] == 1
+    r = conn.execute("SELECT * FROM products WHERE id=?", (pid,)).fetchone()
+    assert r["size_mm"] == "2438x1219" and r["finish"] == "Suede"
+    assert r["thickness_mm"] == 1.0
+    assert r["coverage_sqft_per_box"] == pytest.approx(32.0, abs=0.05)
+    assert r["color_family"] == "Brown"      # walnut
+    assert json.loads(r["provenance"])["size_mm"]["source"] == "extracted:text"
 
 
 PDP = """
