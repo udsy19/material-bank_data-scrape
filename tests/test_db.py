@@ -57,6 +57,37 @@ def test_schema_version_stamped_once(conn):
     assert after == before  # no duplicate stamps
 
 
+def test_v12_backfills_source_url_from_price_observation(conn):
+    """A pre-v8 product (url only on its price_observation) gets its
+    products.source_url repaired; a genuinely urlless row stays NULL."""
+    from material_bank.db import now_iso
+    from material_bank.harvest.common import build_product
+    from material_bank.models import PriceBasis, PriceObservation
+
+    url = "https://www.orientbell.com/some-tile"
+    pid = db.upsert_product(conn, build_product(
+        brand="Orientbell", sku="ob1", title="Some Tile", category="tiles", source=url),
+        supplier_domain="orientbell.com")
+    db.add_price_observation(conn, pid, PriceObservation(
+        source="orientbell.com", price_inr=84, basis=PriceBasis.LISTED_MRP,
+        observed_at=now_iso(), source_url=url))
+    # simulate the pre-v8 defect: the product row lost its url, the observation kept it
+    conn.execute("UPDATE products SET source_url=NULL WHERE id=?", (pid,))
+    # a truly urlless product (no observation) must remain NULL, never invented
+    orphan = db.upsert_product(conn, build_product(
+        brand="X", sku="x1", title="No Url", category="decor", source="https://x/1"),
+        supplier_domain="x.com")
+    conn.execute("UPDATE products SET source_url=NULL WHERE id=?", (orphan,))
+    conn.commit()
+
+    v12_sql = dict((v, sql) for v, sql, _ in db._MIGRATIONS)[12]
+    conn.executescript(v12_sql)
+    conn.commit()
+
+    assert conn.execute("SELECT source_url FROM products WHERE id=?", (pid,)).fetchone()[0] == url
+    assert conn.execute("SELECT source_url FROM products WHERE id=?", (orphan,)).fetchone()[0] is None
+
+
 def test_seed_probe_columns_default_null(conn):
     seed(conn, [Supplier(brand="X", domain="x.com", categories="tiles")])
     row = conn.execute("SELECT * FROM suppliers WHERE domain='x.com'").fetchone()

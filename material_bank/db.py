@@ -19,7 +19,7 @@ from urllib.parse import urlparse
 
 from .models import NormalizedProduct, PriceObservation, Supplier
 
-SCHEMA_VERSION = 11
+SCHEMA_VERSION = 12
 
 _REPO_ROOT = Path(__file__).resolve().parent.parent
 DEFAULT_DB_PATH = _REPO_ROOT / "data" / "catalog.db"
@@ -286,6 +286,25 @@ _MIGRATIONS = (
         CREATE INDEX IF NOT EXISTS idx_products_family ON products(family, category_std);
         """,
      "canonical taxonomy: family / category_std / omniclass"),
+    # Backfill: products harvested BEFORE v8 (which added products.source_url)
+    # kept the real PDP url only on their price_observation. The resumable
+    # harvester skips already-observed urls, so those product rows were never
+    # re-upserted to carry it — leaving ~6.8k priced products (orientbell tile
+    # anchor, royaletouche, ...) with no procurement link despite a real url on
+    # file. Propagate the freshest observation url onto the product. Same real
+    # url, same provenance — a data-repair, not a fabrication.
+    (12, """
+        UPDATE products SET source_url = (
+            SELECT po.source_url FROM price_observation po
+            WHERE po.product_id = products.id AND po.source_url IS NOT NULL
+                  AND TRIM(po.source_url) != ''
+            ORDER BY po.observed_at DESC LIMIT 1)
+        WHERE (source_url IS NULL OR TRIM(source_url) = '')
+          AND EXISTS (SELECT 1 FROM price_observation po2
+                      WHERE po2.product_id = products.id
+                        AND po2.source_url IS NOT NULL AND TRIM(po2.source_url) != '');
+        """,
+     "backfill products.source_url from price_observation (pre-v8 rows)"),
 )
 
 
