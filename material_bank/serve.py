@@ -21,6 +21,7 @@ from .retrieval import (
     list_products,
     list_suppliers,
     stats,
+    supplier_detail,
     top_suppliers,
 )
 from .vectorstore import NumpyVectorStore
@@ -214,6 +215,16 @@ def create_app(state_provider) -> FastAPI:
             sup = list_suppliers(s["conn"])
         return {"count": len(sup), "suppliers": sup}
 
+    @app.get("/api/supplier/{domain}")
+    def api_supplier(domain: str) -> dict:
+        """Procurement profile: who they are, how to reach them, where to buy."""
+        s = S()
+        with lock:
+            d = supplier_detail(s["conn"], domain)
+        if d is None:
+            raise HTTPException(404, "supplier not found")
+        return d
+
     @app.get("/api/product/{pid}")
     def api_product(pid: int) -> dict:
         from .resolve import variants_of
@@ -228,9 +239,10 @@ def create_app(state_provider) -> FastAPI:
             similar = _similar(s, pid)
             variants = variants_of(s["conn"], pid)
             product = dict(row)
+            supplier = supplier_detail(s["conn"], row["supplier_domain"], with_dealers=False)
         product["price"] = freshest_price(s["conn"], pid)
-        return {"product": product, "observations": obs,
-                "variants": variants, "similar": similar}
+        return {"product": product, "observations": obs, "variants": variants,
+                "supplier": supplier, "similar": similar}
 
     @app.get("/api/image")
     def api_image(url: str = Query(...)) -> Response:

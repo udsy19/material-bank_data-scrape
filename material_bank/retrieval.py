@@ -123,6 +123,58 @@ def top_suppliers(conn: sqlite3.Connection, limit: int = 12) -> list[dict]:
         "GROUP BY supplier_domain ORDER BY products DESC LIMIT ?", (limit,))]
 
 
+def _json(v, default):
+    import json
+    try:
+        return json.loads(v) if v else default
+    except (ValueError, TypeError):
+        return default
+
+
+def supplier_detail(conn: sqlite3.Connection, domain: str, *, with_dealers: bool = True) -> dict | None:
+    """Full procurement profile for one supplier: contact + where-to-buy +
+    catalog footprint. ``with_dealers`` attaches a sample of dealer rows."""
+    import json
+    row = conn.execute("SELECT * FROM suppliers WHERE domain=?", (domain,)).fetchone()
+    if row is None:
+        # supplier may have products but no registry row (harvested-only)
+        has = conn.execute("SELECT 1 FROM products WHERE supplier_domain=? LIMIT 1", (domain,)).fetchone()
+        if has is None:
+            return None
+        row = {"domain": domain, "brand": domain}
+    d = dict(row)
+    out = {
+        "domain": domain,
+        "brand": d.get("brand") or domain,
+        "legal_name": d.get("legal_name"),
+        "phones": _json(d.get("phones"), []),
+        "emails": _json(d.get("emails"), []),
+        "address": d.get("address"),
+        "city": d.get("city"), "state": d.get("state"), "pincode": d.get("pincode"),
+        "gstin": d.get("gstin"),
+        "dealer_locator_url": d.get("dealer_locator_url"),
+        "social": _json(d.get("social"), {}),
+        "logo_url": d.get("logo_url"),
+        "year_established": d.get("year_established"),
+        "states_served": _json(d.get("states_served"), []),
+        "cities_served": _json(d.get("cities_served"), []),
+        "dealer_count": d.get("dealer_count") or 0,
+        "pan_india": bool(d.get("pan_india")),
+        "supplier_enriched_at": d.get("supplier_enriched_at"),
+        "provenance": _json(d.get("supplier_provenance"), {}),
+    }
+    prod = conn.execute(
+        "SELECT COUNT(*) n, COUNT(DISTINCT CASE WHEN publish_ready=1 THEN id END) pub "
+        "FROM products WHERE supplier_domain=?", (domain,)).fetchone()
+    out["products"] = prod["n"]
+    out["products_publish_ready"] = prod["pub"]
+    if with_dealers:
+        out["dealers"] = [dict(r) for r in conn.execute(
+            "SELECT name, address, city, state, pincode, phone, email, lat, lon "
+            "FROM dealers WHERE supplier_domain=? ORDER BY state, city LIMIT 40", (domain,))]
+    return out
+
+
 def list_suppliers(conn: sqlite3.Connection) -> list[dict]:
     """Every supplier that has products, with counts + registry metadata."""
     return [dict(r) for r in conn.execute(

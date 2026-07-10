@@ -157,6 +157,30 @@ def test_quality_endpoint_shape(client):
     assert q["products"] == 3
 
 
+def test_supplier_detail_endpoint_and_embedded_block(client):
+    conn = client.conn
+    conn.execute("INSERT INTO suppliers (domain, brand, status, legal_name, phones, "
+                 "gstin, states_served, dealer_count, pan_india) VALUES (?,?,?,?,?,?,?,?,?)",
+                 ("orientbell.com", "Orientbell", "active", "Orient Bell Limited",
+                  '["1244623000"]', "09AABCO1234M1Z5", '["Maharashtra","Delhi"]', 42, 0))
+    conn.execute("INSERT INTO dealers (supplier_domain, name, city, state, pincode, phone) "
+                 "VALUES (?,?,?,?,?,?)",
+                 ("orientbell.com", "Tile World", "Pune", "Maharashtra", "411001", "9800000000"))
+    conn.commit()
+    d = client.get("/api/supplier/orientbell.com").json()
+    assert d["legal_name"] == "Orient Bell Limited" and d["gstin"].startswith("09")
+    assert d["phones"] == ["1244623000"] and d["dealer_count"] == 42
+    assert set(d["states_served"]) == {"Maharashtra", "Delhi"}
+    assert d["dealers"][0]["name"] == "Tile World"
+    assert d["products"] == 1                       # the Orientbell tile in the fixture
+    assert client.get("/api/supplier/nope.com").status_code == 404
+    # product detail embeds the (dealer-less) supplier block
+    pid = client.get("/api/products", params={"supplier": "orientbell.com"}).json()["items"][0]["id"]
+    prod = client.get(f"/api/product/{pid}").json()
+    assert prod["supplier"]["brand"] == "Orientbell" and prod["supplier"]["dealer_count"] == 42
+    assert "dealers" not in prod["supplier"]        # embedded block is lightweight
+
+
 def test_demand_endpoints_event_quote_claim(client):
     # empty demand scorecard reads an honest zero
     d0 = client.get("/api/demand").json()

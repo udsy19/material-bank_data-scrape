@@ -562,6 +562,26 @@ function openClaimForm(p) {
 }
 const val = id => (document.getElementById(id) || {}).value || null;
 
+function supplierHTML(sup) {
+  if (!sup) return "";
+  const phones = (sup.phones || []).slice(0, 2).join(" · ");
+  const email = (sup.emails || [])[0] || "";
+  const states = sup.states_served || [];
+  const bits = [];
+  if (phones) bits.push(`☎ ${escape(phones)}`);
+  if (email) bits.push(`✉ <a href="mailto:${escape(email)}">${escape(email)}</a>`);
+  const where = sup.dealer_count
+    ? `${sup.dealer_count.toLocaleString()} dealers · ${states.length} states${sup.pan_india ? " · pan-India" : ""}` : "";
+  const loc = sup.dealer_locator_url
+    ? `<a href="${escape(sup.dealer_locator_url)}" target="_blank" rel="noopener">store locator ↗</a>` : "";
+  if (!bits.length && !where && !loc && !sup.gstin) return "";
+  const line2 = [sup.legal_name, sup.city, sup.gstin ? "GSTIN " + sup.gstin : ""].filter(Boolean).map(escape).join(" · ");
+  return `<h2>Supplier — ${escape(sup.brand || sup.domain)}</h2>
+    ${line2 ? `<div class="src">${line2}</div>` : ""}
+    ${bits.length ? `<div style="margin-top:6px;font-size:14px">${bits.join(" &nbsp;&nbsp; ")}</div>` : ""}
+    ${(where || loc) ? `<div class="src" style="margin-top:6px">${where}${where && loc ? " · " : ""}${loc}</div>` : ""}`;
+}
+
 async function openProduct(id) {
   track("product_view", {product_id: Number(id)});
   const d = await (await fetch(`/api/product/${id}`)).json();
@@ -585,6 +605,7 @@ async function openProduct(id) {
      ${quoteBoxHTML(p)}
      ${p.image_url?`<div class="img" style="max-width:280px;margin-top:16px;border:1px solid var(--color-mist);border-radius:12px;overflow:hidden"><img src="${img(p.image_url)}" style="width:100%;display:block"></div>`:""}
      ${variantsHTML(d.variants)}
+     ${supplierHTML(d.supplier)}
      <h2>Price observations</h2>
      <table class="obs"><tr><th>Price</th><th>Basis</th><th>Source</th><th>Observed</th></tr>${obs||'<tr><td colspan=4 class="noprice">none</td></tr>'}</table>
      ${sim?`<h2>Visually similar</h2><div class="simgrid">${sim}</div>`:""}`;
