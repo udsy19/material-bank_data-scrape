@@ -13,9 +13,15 @@ $PY -m material_bank.supplier_enrich --seed --only-missing || echo "[suppliers] 
 timeout 90m $PY -m material_bank.supplier_enrich --drain --workers 4 \
     || echo "[suppliers] enrich drain time-boxed/failed (resumes next week)"
 
-# dealer / where-to-buy networks (deterministic parsers, verified sources)
+# dealer / where-to-buy networks (deterministic parsers, verified sources).
+# Single-Interface brands are crawl-bound; --limit caps pages/sweep so they fill
+# in across weeks (resumable, skips already-stored detail URLs).
 for dom in kajariaceramics.com orientbell.com; do
     $PY -m material_bank.dealers --domain "$dom" || echo "[suppliers] dealers $dom failed (non-fatal)"
+done
+for dom in hrjohnsonindia.com somanyceramics.com jaquar.com godrejinterio.com; do
+    timeout 40m $PY -m material_bank.dealers --domain "$dom" --limit 1500 \
+        || echo "[suppliers] dealers $dom time-boxed/failed (resumes next week)"
 done
 
 echo "[suppliers] refresh done"

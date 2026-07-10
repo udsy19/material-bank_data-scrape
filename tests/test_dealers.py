@@ -75,6 +75,36 @@ def test_parse_orientbell_excludes_crm_fields():
         assert "no_of_sales" not in d and "invoice_no" not in blob and "billed_in_history" not in d
 
 
+def test_singleinterface_crawler_follows_index_and_parses_details(conn):
+    from material_bank.fetch import FetchResult
+    base = "https://stores.hrjohnsonindia.com"
+    SITEMAP_INDEX = (f'<sitemapindex xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">'
+                     f'<sitemap><loc>{base}/sm-stores.xml</loc></sitemap></sitemapindex>')
+    URLSET = (f'<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">'
+              f'<url><loc>{base}/tiles-shop/delhi/badarpur/house-of-johnson--4OW/home</loc></url>'
+              f'<url><loc>{base}/location/delhi/</loc></url></urlset>')
+
+    class SIFetcher:
+        def get(self, url):
+            body = ""
+            if url.endswith("/sitemap.xml"):
+                body = SITEMAP_INDEX
+            elif url.endswith("/sm-stores.xml"):
+                body = URLSET
+            elif url.endswith("/home"):
+                body = SI_HTML   # reuse the microdata fixture above
+            return FetchResult(requested_url=url, status_code=200, text=body, final_url=url)
+
+    conn.execute("INSERT OR IGNORE INTO suppliers (domain,brand,status) VALUES "
+                 "('hrjohnsonindia.com','H&R Johnson','active')")
+    conn.commit()
+    stats = dealers.harvest_singleinterface(conn, SIFetcher(), domain="hrjohnsonindia.com")
+    assert stats["detail_pages"] == 1 and stats["dealers_added"] == 1  # /location/ not crawled as detail
+    r = conn.execute("SELECT name, city, state FROM dealers WHERE supplier_domain=?",
+                     ("hrjohnsonindia.com",)).fetchone()
+    assert r["name"] == "House of Johnson Experience Centre" and r["city"] == "New Delhi"
+
+
 def test_store_strips_leaked_html(conn):
     rows = [{"name": "Satish <b>Enterprises</b>", "city": "Amalapuram", "state": "Andhra Pradesh",
              "pincode": "533201", "phone": "<p>8639751848</p>"}]
@@ -82,6 +112,11 @@ def test_store_strips_leaked_html(conn):
     r = conn.execute("SELECT name, phone FROM dealers WHERE supplier_domain=?",
                      ("kajariaceramics.com",)).fetchone()
     assert r["name"] == "Satish Enterprises" and r["phone"] == "8639751848"
+    # HTML entities are decoded too (&amp; -> &)
+    dealers.store_dealers(conn, "hrjohnsonindia.com",
+                          [{"name": "H &amp; R Johnson", "city": "Latur", "pincode": "413517"}])
+    assert conn.execute("SELECT name FROM dealers WHERE supplier_domain='hrjohnsonindia.com'"
+                        ).fetchone()[0] == "H & R Johnson"
 
 
 def test_store_and_derive_regions(conn):

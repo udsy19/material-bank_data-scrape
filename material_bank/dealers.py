@@ -15,12 +15,15 @@ Parsers are pure functions (offline-tested); harvesters add the polite fetch.
 
 from __future__ import annotations
 
+import functools
+import html
 import json
 import re
 import sqlite3
 
 from . import db
 from .fetch import Fetcher
+from .sitemap import parse_sitemap
 
 # ── pure parsers (tested offline) ────────────────────────────────────────────
 
@@ -137,7 +140,7 @@ def _sanitize(d: dict) -> dict:
     for k in ("name", "address", "city", "state", "pincode", "phone", "email"):
         v = out.get(k)
         if isinstance(v, str):
-            v = re.sub(r"\s+", " ", _TAG_RE.sub(" ", v)).strip()
+            v = html.unescape(re.sub(r"\s+", " ", _TAG_RE.sub(" ", v)).strip())
             out[k] = v or None
     return out
 
@@ -194,14 +197,23 @@ def derive_regions(conn: sqlite3.Connection, domain: str) -> dict:
 KAJARIA = "kajariaceramics.com"
 ORIENTBELL = "orientbell.com"
 
+# Brands on the shared Single-Interface store-locator SaaS: one parser, SSR
+# schema.org microdata, robots allows the HTML detail pages (only /api/ blocked).
+SINGLE_INTERFACE = {
+    "hrjohnsonindia.com": "https://stores.hrjohnsonindia.com",
+    "somanyceramics.com": "https://dealers.somanyceramics.com",
+    "jaquar.com": "https://dealers.jaquar.com",
+    "godrejinterio.com": "https://stores.interio.com",
+}
 
-def harvest_kajaria_dealers(conn, fetcher: Fetcher, *, limit_states: int | None = None) -> dict:
+
+def harvest_kajaria_dealers(conn, fetcher: Fetcher, *, limit: int | None = None) -> dict:
     base = "https://www.kajariaceramics.com"
     r = fetcher.get(f"{base}/api/getStates?country=India")
     states = json.loads(r.text) if r.ok else []
     states = [s for s in states if isinstance(s, str)]
-    if limit_states:
-        states = states[:limit_states]
+    if limit:
+        states = states[:limit]
     total = 0
     for st in states:
         rr = fetcher.get(f"{base}/api/getStores?state={st}&country=India&page=1")
@@ -215,15 +227,15 @@ def harvest_kajaria_dealers(conn, fetcher: Fetcher, *, limit_states: int | None 
     return {"domain": KAJARIA, "states": len(states), "dealers_added": total}
 
 
-def harvest_orientbell_dealers(conn, fetcher: Fetcher, *, limit_states: int | None = None) -> dict:
+def harvest_orientbell_dealers(conn, fetcher: Fetcher, *, limit: int | None = None) -> dict:
     base = "https://www.orientbell.com"
     first = fetcher.get(f"{base}/store-locator/maharashtra")
     states_data = _page_props(first.text).get("statesData", []) if first.ok else []
     slugs = [re.sub(r"\s+", "-", (s.get("state") or "").lower())
              for s in states_data if isinstance(s, dict)]
     slugs = [s for s in slugs if s] or ["maharashtra"]
-    if limit_states:
-        slugs = slugs[:limit_states]
+    if limit:
+        slugs = slugs[:limit]
     total = 0
     for slug in slugs:
         rr = fetcher.get(f"{base}/store-locator/{slug}")
@@ -241,9 +253,52 @@ def harvest_orientbell_dealers(conn, fetcher: Fetcher, *, limit_states: int | No
     return {"domain": ORIENTBELL, "states": len(slugs), "dealers_added": total}
 
 
+def si_detail_urls(fetcher: Fetcher, base: str, *, cap: int) -> list[str]:
+    """Store-detail URLs from a Single-Interface sitemap (recurses index sitemaps).
+    Detail pages end in /home; index/city sitemaps are followed, not returned."""
+    seen: set[str] = set()
+    out: list[str] = []
+    queue = [f"{base}/sitemap.xml"]
+    while queue and len(out) < cap:
+        sm = queue.pop(0)
+        if sm in seen:
+            continue
+        seen.add(sm)
+        r = fetcher.get(sm)
+        if not r.ok:
+            continue
+        kind, locs = parse_sitemap(r.text)
+        if kind == "index":
+            queue.extend(u for u in locs if u not in seen)
+        else:
+            out.extend(u for u in locs if u.rstrip("/").endswith("/home"))
+    return out[:cap]
+
+
+def harvest_singleinterface(conn, fetcher: Fetcher, *, domain: str,
+                            limit: int | None = 400) -> dict:
+    """Crawl a Single-Interface brand's store-detail pages. Resumable: skips
+    detail URLs already stored, so a big network fills in across weekly sweeps."""
+    base = SINGLE_INTERFACE[domain]
+    cap = limit or 100000
+    have = {r[0] for r in conn.execute(
+        "SELECT source_url FROM dealers WHERE supplier_domain=?", (domain,)) if r[0]}
+    urls = [u for u in si_detail_urls(fetcher, base, cap=cap * 3) if u not in have][:cap]
+    total = 0
+    for u in urls:
+        r = fetcher.get(u)
+        if r.ok and r.text:
+            d = parse_singleinterface_detail(r.text, u)
+            if d:
+                total += store_dealers(conn, domain, [d])
+    derive_regions(conn, domain)
+    return {"domain": domain, "detail_pages": len(urls), "dealers_added": total}
+
+
 DEALER_HARVESTERS = {
     KAJARIA: harvest_kajaria_dealers,
     ORIENTBELL: harvest_orientbell_dealers,
+    **{dom: functools.partial(harvest_singleinterface, domain=dom) for dom in SINGLE_INTERFACE},
 }
 
 
@@ -253,13 +308,13 @@ def main(argv=None) -> int:
 
     ap = argparse.ArgumentParser(prog="mb-dealers")
     ap.add_argument("--domain", choices=sorted(DEALER_HARVESTERS), required=True)
-    ap.add_argument("--limit-states", type=int, default=None)
+    ap.add_argument("--limit", type=int, default=None,
+                    help="cap work (states for API sources, detail pages for Single-Interface)")
     ap.add_argument("--db", default=str(db.DEFAULT_DB_PATH))
     args = ap.parse_args(argv)
     conn = db.connect(args.db)
     db.migrate(conn)
-    stats = DEALER_HARVESTERS[args.domain](conn, Fetcher(raw_dir=None),
-                                           limit_states=args.limit_states)
+    stats = DEALER_HARVESTERS[args.domain](conn, Fetcher(raw_dir=None), limit=args.limit)
     print(json.dumps(stats), file=sys.stderr)
     conn.close()
     return 0
