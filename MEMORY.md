@@ -35,6 +35,14 @@
 - **Bonus — self-healing unblocked**: `candidates()` requires `source_url`, so pre-backfill these suppliers were *excluded* from the enrich refetch. Now eligible → the flywheel will auto-mine orientbell/royaletouche PDP specs going forward, no manual step.
 - **Recurring truth**: publish-readiness is gated on a fresh price (25 pts). Spec-only suppliers (Somany tiles 7,889; Kajaria) correctly can't be "procurement-ready" without price data — the remaining completeness grind is price-limited, so the next real lever is more priced sources / dealer quotes, or Phase C (dedup → cross-supplier price comparison).
 
+## Phase C v1 — variant grouping (One Product, One Truth): LIVE (2026-07-09)
+
+- **Investigated the data before building (decisive)**: cross-supplier duplicates barely exist — 0 (brand,size) keys span two suppliers; our 50 suppliers are disjoint brand-direct catalogs. So the headline "cross-supplier price comparison" wedge **has no data yet** and was NOT built. What IS in the data: within a supplier, 23k products (15%) share a (brand,title) with a sibling, each a **distinct SKU** — variants (one mattress model in ~200 size×thickness SKUs), not dupes. Merging would destroy real SKUs, so the honest move is **grouping, never deleting**.
+- **`resolve.py`**: `variant_group_id = sha1(supplier | norm brand | norm title)[:16]`; 1-token titles guarded out (too generic to group safely). `assign_variant_groups` (idempotent, read-then-write) links siblings, singletons stay NULL. `variants_of()` returns siblings + distinguishing attrs + each one's own price. Schema **v13** (variant_group_id + resolved_at + index). Runs in the planner every sweep (after scoring).
+- **`retrieval.list_designs`**: collapsed catalog — one card per design with variant_count + price band; filters apply to members pre-group (a gated view counts publishable variants). `/api/catalog?collapse=true` (design cards) + `/api/product` exposes `variants[]`.
+- **Live: 5,410 groups covering 23,273 SKUs** → catalog collapses 159,674 rows → ~141,811 designs; publish-gated design count 131,077. "Wakefit Dual Comfort Mattress" is now ONE card, 188 variants, ₹3,476–20,418 band (was 188 near-identical rows).
+- **Known follow-up**: mattress/furniture variants distinguish by SKU+price but `attrs` is often empty — the size/thickness axis lives on the PDP variant selector, not the (identical) title, so it isn't captured per-variant. The source_url backfill made these suppliers eligible for the enrich refetch, which is the path to fill it. Also owed: dual-unit price serving, image color-family. Cross-supplier comparison revisits when overlapping suppliers exist.
+
 ## CI/CD + durability (2026-07-07)
 
 - **GitHub is now the source of truth**: main pushed (was local-only!). VPS is a real clone with a write **deploy key** (added via gh api, id 156633150).
