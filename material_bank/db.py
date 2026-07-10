@@ -19,7 +19,7 @@ from urllib.parse import urlparse
 
 from .models import NormalizedProduct, PriceObservation, Supplier
 
-SCHEMA_VERSION = 13
+SCHEMA_VERSION = 14
 
 _REPO_ROOT = Path(__file__).resolve().parent.parent
 DEFAULT_DB_PATH = _REPO_ROOT / "data" / "catalog.db"
@@ -315,6 +315,51 @@ _MIGRATIONS = (
         CREATE INDEX IF NOT EXISTS idx_products_variant ON products(variant_group_id);
         """,
      "variant grouping: variant_group_id + resolved_at"),
+    # Supplier procurement enrichment: the "who supplies it / where to buy"
+    # layer. Collected ONLY from the supplier's own registered domain (legal
+    # guardrail), each field provenance-tagged in supplier_provenance. A separate
+    # `dealers` table holds the where-to-buy network (evidence trail); regions
+    # served are DERIVED from it, never declared.
+    (14, """
+        ALTER TABLE suppliers ADD COLUMN legal_name TEXT;
+        ALTER TABLE suppliers ADD COLUMN phones TEXT;          -- JSON array
+        ALTER TABLE suppliers ADD COLUMN emails TEXT;          -- JSON array
+        ALTER TABLE suppliers ADD COLUMN address TEXT;
+        ALTER TABLE suppliers ADD COLUMN city TEXT;
+        ALTER TABLE suppliers ADD COLUMN state TEXT;
+        ALTER TABLE suppliers ADD COLUMN pincode TEXT;
+        ALTER TABLE suppliers ADD COLUMN gstin TEXT;
+        ALTER TABLE suppliers ADD COLUMN cin TEXT;
+        ALTER TABLE suppliers ADD COLUMN dealer_locator_url TEXT;
+        ALTER TABLE suppliers ADD COLUMN social TEXT;          -- JSON object
+        ALTER TABLE suppliers ADD COLUMN logo_url TEXT;
+        ALTER TABLE suppliers ADD COLUMN year_established TEXT;
+        ALTER TABLE suppliers ADD COLUMN states_served TEXT;   -- JSON array (derived)
+        ALTER TABLE suppliers ADD COLUMN cities_served TEXT;   -- JSON array (derived)
+        ALTER TABLE suppliers ADD COLUMN dealer_count INTEGER;
+        ALTER TABLE suppliers ADD COLUMN pan_india INTEGER;
+        ALTER TABLE suppliers ADD COLUMN supplier_provenance TEXT; -- JSON {field:{source,basis,confidence,observed_at}}
+        ALTER TABLE suppliers ADD COLUMN supplier_enriched_at TEXT;
+        CREATE TABLE IF NOT EXISTS dealers (
+            id              INTEGER PRIMARY KEY AUTOINCREMENT,
+            supplier_domain TEXT NOT NULL,
+            name            TEXT,
+            address         TEXT,
+            city            TEXT,
+            state           TEXT,
+            pincode         TEXT,
+            lat             REAL,
+            lon             REAL,
+            phone           TEXT,
+            email           TEXT,
+            source_url      TEXT,
+            observed_at     TEXT,
+            UNIQUE(supplier_domain, name, pincode, address)
+        );
+        CREATE INDEX IF NOT EXISTS idx_dealers_domain ON dealers(supplier_domain);
+        CREATE INDEX IF NOT EXISTS idx_dealers_geo ON dealers(state, city);
+        """,
+     "supplier procurement fields + dealers (where-to-buy) table"),
 )
 
 
