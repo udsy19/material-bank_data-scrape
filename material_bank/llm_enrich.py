@@ -216,3 +216,29 @@ def gemini_client(model: str = "gemini-2.5-flash"):
         return json.loads(txt)
 
     return _call
+
+
+def main(argv=None) -> int:
+    import argparse
+    import sys
+
+    from . import db
+
+    ap = argparse.ArgumentParser(prog="mb-llm-enrich")
+    ap.add_argument("--limit", type=int, default=100)
+    ap.add_argument("--budget-inr", type=float, default=500.0,
+                    help="hard daily spend cap (circuit breaker)")
+    ap.add_argument("--model", default="gemini-2.5-flash")
+    ap.add_argument("--db", default=str(db.DEFAULT_DB_PATH))
+    args = ap.parse_args(argv)
+    conn = db.connect(args.db)
+    db.migrate(conn)
+    stats = run(conn, client=gemini_client(args.model), model_name=args.model,
+                budget_inr=args.budget_inr, limit=args.limit)
+    print(json.dumps(stats), file=sys.stderr)
+    conn.close()
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
