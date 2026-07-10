@@ -43,6 +43,12 @@
 - **Live: 5,410 groups covering 23,273 SKUs** → catalog collapses 159,674 rows → ~141,811 designs; publish-gated design count 131,077. "Wakefit Dual Comfort Mattress" is now ONE card, 188 variants, ₹3,476–20,418 band (was 188 near-identical rows).
 - **Known follow-up**: mattress/furniture variants distinguish by SKU+price but `attrs` is often empty — the size/thickness axis lives on the PDP variant selector, not the (identical) title, so it isn't captured per-variant. The source_url backfill made these suppliers eligible for the enrich refetch, which is the path to fill it. Also owed: dual-unit price serving, image color-family. Cross-supplier comparison revisits when overlapping suppliers exist.
 
+## Operational fix — harvest sweep monopolization (2026-07-09)
+
+- **Failure mode found live**: one `mb-harvest.service` sweep ran **2 days**. The queue-drain phase used `--jsonld-limit 0` (unlimited) and the service was `TimeoutStartSec=infinity`; the timer is `OnUnitInactiveSec=1h` (next run 1h *after* the current ends), so systemd does NOT overlap a oneshot — the long run **blocked every later phase for 2 days**: recovery, bespoke (Kajaria/Steelcase), self-heal. The flywheel kept working only because it's a separate timer. The script's "spans several ticks" comment was wrong.
+- **Fix**: time-box the drain with `timeout --kill-after=30s ${HARVEST_DRAIN_TIMEOUT:-60m}` (exit 124 expected, not a failure — worker is resumable via atomic claims + `requeue_stale_running` + `source_url`, continues next sweep; still collects everything across sweeps, no per-run cap). Service backstop `TimeoutStartSec=2h` + `TimeoutStopSec=90s` + `KillMode=mixed`. Restarted the wedged run (safe/resumable); fresh bounded sweep confirmed draining.
+- **Lesson**: any unbounded phase inside a oneshot-on-timer starves the rest of that unit's phases. Time-box long phases; rely on resumability, not completion, to make progress.
+
 ## CI/CD + durability (2026-07-07)
 
 - **GitHub is now the source of truth**: main pushed (was local-only!). VPS is a real clone with a write **deploy key** (added via gh api, id 156633150).
