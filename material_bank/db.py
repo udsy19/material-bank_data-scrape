@@ -19,7 +19,7 @@ from urllib.parse import urlparse
 
 from .models import NormalizedProduct, PriceObservation, Supplier
 
-SCHEMA_VERSION = 14
+SCHEMA_VERSION = 15
 
 _REPO_ROOT = Path(__file__).resolve().parent.parent
 DEFAULT_DB_PATH = _REPO_ROOT / "data" / "catalog.db"
@@ -360,6 +360,45 @@ _MIGRATIONS = (
         CREATE INDEX IF NOT EXISTS idx_dealers_geo ON dealers(state, city);
         """,
      "supplier procurement fields + dealers (where-to-buy) table"),
+    # Demand instrumentation + intent capture. Everything built so far is
+    # supply-side; these tables are the first demand-side signal so the moment
+    # the catalog is in front of a user we measure intent (searches, views,
+    # quote requests) instead of guessing. supplier_claims also powers the
+    # claim/correct/takedown flow (turns a brand's objection into an onboarding).
+    (15, """
+        CREATE TABLE IF NOT EXISTS events (
+            id           INTEGER PRIMARY KEY AUTOINCREMENT,
+            occurred_at  TEXT NOT NULL,
+            session_id   TEXT,
+            kind         TEXT NOT NULL,   -- search | product_view | result_click | quote_request
+            query        TEXT,
+            product_id   INTEGER,
+            supplier_domain TEXT,
+            meta         TEXT
+        );
+        CREATE INDEX IF NOT EXISTS idx_events_kind ON events(kind, occurred_at);
+        CREATE TABLE IF NOT EXISTS quote_requests (
+            id            INTEGER PRIMARY KEY AUTOINCREMENT,
+            created_at    TEXT NOT NULL,
+            product_id    INTEGER,
+            supplier_domain TEXT,
+            source_url    TEXT,
+            buyer_name    TEXT,
+            buyer_contact TEXT,           -- email/phone the buyer voluntarily gives
+            message       TEXT,
+            status        TEXT NOT NULL DEFAULT 'new'
+        );
+        CREATE TABLE IF NOT EXISTS supplier_claims (
+            id             INTEGER PRIMARY KEY AUTOINCREMENT,
+            created_at     TEXT NOT NULL,
+            supplier_domain TEXT NOT NULL,
+            kind           TEXT NOT NULL, -- claim | correct | remove
+            claimant_email TEXT,
+            message        TEXT,
+            status         TEXT NOT NULL DEFAULT 'new'
+        );
+        """,
+     "demand instrumentation: events + quote_requests + supplier_claims"),
 )
 
 

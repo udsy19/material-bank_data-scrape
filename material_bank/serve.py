@@ -10,7 +10,7 @@ import threading
 from pathlib import Path
 
 import numpy as np
-from fastapi import FastAPI, HTTPException, Query
+from fastapi import Body, FastAPI, HTTPException, Query
 from fastapi.responses import HTMLResponse, Response
 
 from . import db, jobs
@@ -157,6 +157,55 @@ def create_app(state_provider) -> FastAPI:
                 "median_completeness": metrics_trend(s["conn"], "median_completeness", 30),
             }
         return rep
+
+    @app.post("/api/event")
+    def api_event(payload: dict = Body(...)) -> dict:
+        """Demand instrumentation — the client logs search / view / click here."""
+        from . import events
+        s = S()
+        with lock:
+            events.log_event(s["conn"], (payload.get("kind") or ""),
+                             session_id=payload.get("session_id"), query=payload.get("query"),
+                             product_id=payload.get("product_id"),
+                             supplier_domain=payload.get("supplier_domain"),
+                             meta=payload.get("meta"))
+        return {"ok": True}
+
+    @app.post("/api/quote")
+    def api_quote(payload: dict = Body(...)) -> dict:
+        """Intent capture — a buyer asks to source a product. The signal Act III sells."""
+        from . import events
+        s = S()
+        with lock:
+            qid = events.record_quote(
+                s["conn"], product_id=payload.get("product_id"),
+                supplier_domain=payload.get("supplier_domain"),
+                source_url=payload.get("source_url"), buyer_name=payload.get("buyer_name"),
+                buyer_contact=payload.get("buyer_contact"), message=payload.get("message"))
+        return {"ok": True, "id": qid}
+
+    @app.post("/api/claim")
+    def api_claim(payload: dict = Body(...)) -> dict:
+        """Supplier claim / correct / takedown — turns an objection into an onboarding."""
+        from . import events
+        dom = (payload.get("supplier_domain") or "").strip()
+        kind = (payload.get("kind") or "").strip()
+        if not dom or kind not in {"claim", "correct", "remove"}:
+            raise HTTPException(400, "supplier_domain and a valid kind are required")
+        s = S()
+        with lock:
+            cid = events.record_claim(s["conn"], supplier_domain=dom, kind=kind,
+                                      claimant_email=payload.get("claimant_email"),
+                                      message=payload.get("message"))
+        return {"ok": True, "id": cid}
+
+    @app.get("/api/demand")
+    def api_demand() -> dict:
+        """The demand-side scorecard — zero until there are users, honestly."""
+        from . import events
+        s = S()
+        with lock:
+            return events.demand_metrics(s["conn"])
 
     @app.get("/api/suppliers")
     def api_suppliers() -> dict:

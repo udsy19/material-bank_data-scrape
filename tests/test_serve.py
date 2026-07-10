@@ -157,6 +157,29 @@ def test_quality_endpoint_shape(client):
     assert q["products"] == 3
 
 
+def test_demand_endpoints_event_quote_claim(client):
+    # empty demand scorecard reads an honest zero
+    d0 = client.get("/api/demand").json()
+    assert d0["active_sessions"] == 0 and d0["quote_requests_total"] == 0
+    # client logs a search + click
+    client.post("/api/event", json={"kind": "search", "session_id": "s1", "query": "tile"})
+    client.post("/api/event", json={"kind": "result_click", "session_id": "s1", "product_id": 1})
+    client.post("/api/event", json={"kind": "bogus"})          # ignored, no error
+    # intent capture
+    q = client.post("/api/quote", json={"product_id": 1, "supplier_domain": "orientbell.com",
+                                        "buyer_contact": "buyer@firm.example",
+                                        "message": "need 20 boxes"}).json()
+    assert q["ok"] and q["id"] >= 1
+    # supplier claim/takedown
+    c = client.post("/api/claim", json={"supplier_domain": "orientbell.com", "kind": "remove",
+                                        "claimant_email": "legal@orientbell.com"}).json()
+    assert c["ok"]
+    assert client.post("/api/claim", json={"kind": "remove"}).status_code == 400   # missing domain
+    d = client.get("/api/demand").json()
+    assert d["active_sessions"] == 1 and d["searches"] == 1 and d["search_ctr"] == 1.0
+    assert d["quote_requests_total"] == 1 and d["supplier_claims_total"] == 1
+
+
 def test_catalog_collapse_and_product_variants(client):
     from material_bank.harvest.common import build_product
     from material_bank.models import PriceBasis, PriceObservation
