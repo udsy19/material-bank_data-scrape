@@ -9,7 +9,11 @@ User=__APP_USER__
 WorkingDirectory=__APP_DIR__
 EnvironmentFile=-__APP_DIR__/.env
 ExecStart=/usr/bin/env bash __APP_DIR__/deploy/harvest_once.sh
-# a sweep draining a giant can run long; don't let systemd kill it
-TimeoutStartSec=infinity
+# The queue-drain phase is time-boxed inside the script (resumable next sweep).
+# This is only a backstop so a wedged sweep can never monopolize the timer the
+# way an unbounded one did (a 2-day run blocked all recovery/bespoke/self-heal).
+TimeoutStartSec=2h
+TimeoutStopSec=90s
+KillMode=mixed
 StandardOutput=append:__APP_DIR__/reports/mb-harvest.log
 StandardError=append:__APP_DIR__/reports/mb-harvest.log
