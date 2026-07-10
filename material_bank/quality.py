@@ -128,6 +128,40 @@ def _one(conn, sql, *params):
     return row[0] if row else None
 
 
+# Rich attributes that signal real ENRICHMENT DEPTH — reported alongside
+# completeness because the completeness score is deliberately lenient (a
+# non-surface product maxes it out with just title+brand+image+category+url+
+# price). Depth answers "how enriched is the corpus, really?", which the
+# headline completeness number does not.
+_DEPTH_FIELDS = ("description", "size_mm", "finish", "color", "thickness_mm",
+                 "coverage_sqft_per_box", "price_unit")
+
+
+def attribute_depth(conn: sqlite3.Connection) -> dict:
+    """Per-field coverage % over the whole corpus + their mean (honest depth)."""
+    total = _one(conn, "SELECT COUNT(*) FROM products") or 0
+    fields = {}
+    for f in _DEPTH_FIELDS:
+        n = _one(conn, f"SELECT COUNT(*) FROM products WHERE {f} IS NOT NULL") or 0
+        fields[f] = round(100 * n / total) if total else 0
+    mean = round(sum(fields.values()) / len(fields)) if fields else 0
+    return {"fields": fields, "mean_pct": mean}
+
+
+def overlap_rate(conn: sqlite3.Connection) -> dict:
+    """Cross-supplier overlap: the share of (brand,size) design keys that appear
+    at ≥2 suppliers. This is the gate on cross-supplier price comparison
+    (Phase C) — it is ~0 until multi-brand/dealer supply is ingested, and saying
+    so honestly is the point."""
+    total = _one(conn, "SELECT COUNT(*) FROM (SELECT 1 FROM products "
+                       "WHERE size_mm IS NOT NULL GROUP BY LOWER(brand), size_mm)") or 0
+    multi = _one(conn, "SELECT COUNT(*) FROM (SELECT 1 FROM products "
+                       "WHERE size_mm IS NOT NULL GROUP BY LOWER(brand), size_mm "
+                       "HAVING COUNT(DISTINCT supplier_domain) >= 2)") or 0
+    return {"keys": total, "cross_supplier_keys": multi,
+            "rate_pct": round(100 * multi / total, 2) if total else 0.0}
+
+
 def quality_report(conn: sqlite3.Connection) -> dict:
     """Live quality state (the /api/quality payload + planner input)."""
     q = lambda s, *p: _one(conn, s, *p)  # noqa: E731
@@ -150,6 +184,9 @@ def quality_report(conn: sqlite3.Connection) -> dict:
                 FROM products WHERE completeness IS NOT NULL
                 GROUP BY category HAVING n >= 200
                 ORDER BY AVG(completeness) ASC LIMIT 8""")],
+        # honest counterweights to the (lenient) completeness headline
+        "attribute_depth": attribute_depth(conn),
+        "overlap": overlap_rate(conn),
     }
     return report
 
@@ -167,6 +204,9 @@ def snapshot_metrics(conn: sqlite3.Connection) -> int:
     rows += [(ts, "global", "priced_fresh", conn.execute(
         "SELECT COUNT(DISTINCT product_id) FROM price_observation "
         "WHERE julianday('now') - julianday(observed_at) <= 7").fetchone()[0])]
+    # track the honest depth + overlap numbers over time, not just completeness
+    rows += [(ts, "global", "enrichment_depth", rep["attribute_depth"]["mean_pct"]),
+             (ts, "global", "overlap_rate", rep["overlap"]["rate_pct"])]
     conn.executemany(
         "INSERT INTO metrics (captured_at, scope, key, value) VALUES (?,?,?,?)", rows)
     conn.commit()

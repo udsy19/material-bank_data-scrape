@@ -110,6 +110,28 @@ def test_snapshot_and_trend(conn):
     assert len(trend) == 1 and trend[0]["value"] >= 1
 
 
+def test_attribute_depth_and_overlap_are_honest(conn):
+    # a non-surface product with no rich attrs still scores 100 (lenient) — the
+    # depth metric must report that emptiness honestly.
+    _add(conn, sku="d1", category="rugs", size=None, finish=None,
+         price_unit=None, coverage=None)
+    quality.score_all(conn)
+    r = quality.quality_report(conn)
+    assert r["publish_ready"] == 1                      # passes the lenient gate
+    depth = r["attribute_depth"]
+    assert depth["fields"]["description"] == 0          # nothing enriched
+    assert depth["fields"]["finish"] == 0
+    assert depth["mean_pct"] < 30                        # honestly thin
+    # two same-brand+size SKUs from ONE supplier -> zero cross-supplier overlap
+    _add(conn, sku="t1", size="600x600"); _add(conn, sku="t2", size="600x600")
+    ov = quality.overlap_rate(conn)
+    assert ov["cross_supplier_keys"] == 0 and ov["rate_pct"] == 0.0
+    # snapshot now tracks depth + overlap as their own time series
+    quality.snapshot_metrics(conn)
+    assert quality.metrics_trend(conn, "enrichment_depth")
+    assert quality.metrics_trend(conn, "overlap_rate")
+
+
 def test_planner_end_to_end(tmp_path, conn):
     _add(conn, sku="x"); _add(conn, sku="y", title="Test")  # one good, one junk
     conn.close()
