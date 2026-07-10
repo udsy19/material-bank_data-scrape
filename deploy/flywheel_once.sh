@@ -11,6 +11,8 @@ PY=./.venv/bin/python
 echo "[flywheel] $(date -u +%FT%TZ) tick"
 
 $PY -m material_bank.enrich --text-pass  || echo "[flywheel] text-pass failed (non-fatal)"
+timeout 12m $PY -m material_bank.image_colour --limit 400 \
+                                          || echo "[flywheel] image-colour time-boxed (non-fatal)"
 $PY -m material_bank.planner              || echo "[flywheel] planner failed (non-fatal)"
 $PY -m material_bank.enrich --drain --limit 250 --workers 4 \
                                           || echo "[flywheel] enrich drain failed (non-fatal)"

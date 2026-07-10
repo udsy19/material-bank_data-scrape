@@ -19,7 +19,7 @@ from urllib.parse import urlparse
 
 from .models import NormalizedProduct, PriceObservation, Supplier
 
-SCHEMA_VERSION = 15
+SCHEMA_VERSION = 16
 
 _REPO_ROOT = Path(__file__).resolve().parent.parent
 DEFAULT_DB_PATH = _REPO_ROOT / "data" / "catalog.db"
@@ -399,6 +399,16 @@ _MIGRATIONS = (
         );
         """,
      "demand instrumentation: events + quote_requests + supplier_claims"),
+    # Stage A1: image-derived colour (measured from pixels, basis
+    # derived:pixel-clustering). Kept separate from the text-derived `color` so
+    # provenance/survivorship stays crisp (pixel beats title where both exist).
+    (16, """
+        ALTER TABLE products ADD COLUMN colour_primary TEXT;
+        ALTER TABLE products ADD COLUMN colour_secondary TEXT;
+        ALTER TABLE products ADD COLUMN colour_confidence REAL;
+        ALTER TABLE products ADD COLUMN colour_scored_at TEXT;
+        """,
+     "image-derived colour: colour_primary/secondary/confidence"),
 )
 
 

@@ -25,9 +25,13 @@ def run_planner(db_path: str | Path | None = None) -> dict:
     classify_all(conn)          # canonical taxonomy before scoring
     summary = score_all(conn)
     variants = assign_variant_groups(conn)  # group SKUs into design families
+    from .image_colour import eval_colour
+
     audit = audit_variant_groups(conn)      # free QA of grouping quality
-    conn.execute("INSERT INTO metrics (captured_at, scope, key, value) VALUES (?,?,?,?)",
-                 (db.now_iso(), "global", "suspect_variant_groups", audit["suspect_count"]))
+    colour = eval_colour(conn)              # pixel-colour accuracy vs text ground truth
+    conn.executemany("INSERT INTO metrics (captured_at, scope, key, value) VALUES (?,?,?,?)",
+                     [(db.now_iso(), "global", "suspect_variant_groups", audit["suspect_count"]),
+                      (db.now_iso(), "global", "colour_accuracy", colour["same_family_accuracy"])])
     conn.commit()
     snapshot_rows = snapshot_metrics(conn)
     enrich_jobs = seed_enrich_jobs(conn)    # measured gaps -> queued work
