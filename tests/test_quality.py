@@ -110,6 +110,15 @@ def test_snapshot_and_trend(conn):
     assert len(trend) == 1 and trend[0]["value"] >= 1
 
 
+def test_missing_source_url_blocks_publish(conn):
+    pid = _add(conn, sku="nourl")                       # fully complete surface
+    conn.execute("UPDATE products SET source_url=NULL WHERE id=?", (pid,))
+    conn.commit()
+    quality.score_all(conn)
+    r = _row(conn, pid)
+    assert r["completeness"] >= 70 and r["publish_ready"] == 0   # no procurement link -> gated
+
+
 def test_attribute_depth_and_overlap_are_honest(conn):
     # a non-surface product with no rich attrs still scores 100 (lenient) — the
     # depth metric must report that emptiness honestly.

@@ -1,0 +1,16 @@
+[Unit]
+Description=Material Bank — weekly supplier procurement refresh (contact + dealers)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=__APP_USER__
+WorkingDirectory=__APP_DIR__
+EnvironmentFile=-__APP_DIR__/.env
+ExecStart=/usr/bin/env bash __APP_DIR__/deploy/suppliers_once.sh
+TimeoutStartSec=3h
+TimeoutStopSec=90s
+KillMode=mixed
+StandardOutput=append:__APP_DIR__/reports/mb-suppliers.log
+StandardError=append:__APP_DIR__/reports/mb-suppliers.log

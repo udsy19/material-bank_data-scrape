@@ -1,0 +1,10 @@
+[Unit]
+Description=Material Bank — supplier procurement refresh, weekly
+
+[Timer]
+OnBootSec=15min
+OnUnitInactiveSec=7d
+Persistent=true
+
+[Install]
+WantedBy=timers.target

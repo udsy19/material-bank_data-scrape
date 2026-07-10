@@ -75,9 +75,12 @@ def tier_row(row) -> str:
     return "auto_validated"
 
 
-def publish_gate(completeness: int, tier: str, surface: bool) -> bool:
+def publish_gate(completeness: int, tier: str, surface: bool, has_url: bool = True) -> bool:
+    """The gate: complete enough, not contradictory, AND has a procurement link.
+    A published record with no source_url fails the core 'can I actually buy
+    this?' test, so a valid URL is a hard requirement, not just 5 points."""
     threshold = PUBLISH_THRESHOLDS["surface" if surface else "default"]
-    return completeness >= threshold and tier != "unverified"
+    return completeness >= threshold and tier != "unverified" and has_url
 
 
 _SCORE_QUERY = """
@@ -110,7 +113,7 @@ def score_all(conn: sqlite3.Connection, *, batch: int = 20000) -> dict:
     for row in rows:
         completeness, surface = score_row(row, row["price_age"])
         tier = tier_row(row)
-        ready = publish_gate(completeness, tier, surface)
+        ready = publish_gate(completeness, tier, surface, _present(row, "source_url"))
         updates.append((completeness, tier, int(ready), ts, row["id"]))
         summary["scored"] += 1
         summary["publish_ready"] += int(ready)
