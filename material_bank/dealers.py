@@ -127,11 +127,27 @@ def _page_props(html: str) -> dict:
 # ── storage + region derivation ──────────────────────────────────────────────
 
 
+_TAG_RE = re.compile(r"<[^>]+>")
+
+
+def _sanitize(d: dict) -> dict:
+    """Strip stray HTML tags + collapse whitespace in text fields (some source
+    payloads leak markup into e.g. the phone field)."""
+    out = dict(d)
+    for k in ("name", "address", "city", "state", "pincode", "phone", "email"):
+        v = out.get(k)
+        if isinstance(v, str):
+            v = re.sub(r"\s+", " ", _TAG_RE.sub(" ", v)).strip()
+            out[k] = v or None
+    return out
+
+
 def store_dealers(conn: sqlite3.Connection, domain: str, dealers: list[dict],
                   *, source_url: str | None = None) -> int:
     ts = db.now_iso()
     n = 0
     for d in dealers:
+        d = _sanitize(d)
         if not (d.get("name") and (d.get("city") or d.get("pincode"))):
             continue
         # NULL-safe dedup (the table UNIQUE misses rows with a NULL address/pincode)

@@ -75,6 +75,15 @@ def test_parse_orientbell_excludes_crm_fields():
         assert "no_of_sales" not in d and "invoice_no" not in blob and "billed_in_history" not in d
 
 
+def test_store_strips_leaked_html(conn):
+    rows = [{"name": "Satish <b>Enterprises</b>", "city": "Amalapuram", "state": "Andhra Pradesh",
+             "pincode": "533201", "phone": "<p>8639751848</p>"}]
+    dealers.store_dealers(conn, "kajariaceramics.com", rows)
+    r = conn.execute("SELECT name, phone FROM dealers WHERE supplier_domain=?",
+                     ("kajariaceramics.com",)).fetchone()
+    assert r["name"] == "Satish Enterprises" and r["phone"] == "8639751848"
+
+
 def test_store_and_derive_regions(conn):
     rows = [
         dealers.parse_kajaria_store({"name": "A", "city": "Pune", "state": "Maharashtra",
