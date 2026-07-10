@@ -32,7 +32,9 @@ def run(base: str = BASE) -> tuple[int, int, list[str]]:
         console_errors = []
         page.on("console", lambda m: console_errors.append(m.text) if m.type == "error" else None)
 
-        page.goto(base, wait_until="networkidle", timeout=30000)
+        # domcontentloaded, not networkidle: the catalog loads image cards on
+        # init and the /api/image proxy keeps the network busy — it never idles.
+        page.goto(base, wait_until="domcontentloaded", timeout=30000)
         check("title is DSource Material Bank", "DSource Material Bank" in page.title() or
               page.locator("h1").inner_text().startswith("DSource"))
 
@@ -44,6 +46,31 @@ def run(base: str = BASE) -> tuple[int, int, list[str]]:
 
         # top suppliers rendered
         check("top suppliers listed", page.locator("#suppliers .spill").count() >= 3)
+
+        # ── catalog browse: taxonomy facets + collapsed design cards ────────
+        page.wait_for_selector("#facets .facet", timeout=15000)
+        page.wait_for_selector("#catalog .card", timeout=20000)
+        check("taxonomy facets rendered", page.locator("#facets .facet").count() >= 3)
+        check("design cards rendered", page.locator("#catalog .card").count() >= 6)
+        check("design card shows a price band", page.locator("#catalog .band").count() >= 1)
+        check("variant-group badge shown", page.locator("#catalog .badge").count() >= 1)
+
+        # a badged (multi-variant) design opens a modal with trust + variants
+        badged = page.locator("#catalog .card:has(.badge)").first
+        badged.click()
+        page.wait_for_selector("#overlay.on", timeout=10000)
+        check("design modal shows trust line", page.locator("#modal .trust").count() == 1)
+        check("design modal lists variants", page.locator("#modal .vrow").count() >= 2)
+        page.screenshot(path=str(SHOTS / "design_variants.png"))
+        page.click("#modal .close")
+        page.wait_for_selector("#overlay", state="hidden", timeout=5000)
+
+        # a facet filters the catalog to that family
+        page.locator("#facets .facet").nth(1).click()
+        page.wait_for_timeout(1500)
+        check("facet filter reloads catalog", page.locator("#catalog .card").count() >= 1)
+        page.locator("#facets .facet").first.click()  # reset to All
+        page.wait_for_timeout(800)
 
         # search flow
         page.fill("#q", "brass pendant light")

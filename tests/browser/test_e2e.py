@@ -63,6 +63,12 @@ def server():
                 time.sleep(1)
         else:
             pytest.skip("server did not start in time")
+        # warm the state provider (lazy marqo model load) before checks run, so
+        # the first data request doesn't race a check's timeout with a cold load
+        try:
+            urllib.request.urlopen(base + "/api/stats", timeout=90).read()
+        except Exception:
+            pass
         yield base
     finally:
         proc.terminate()
