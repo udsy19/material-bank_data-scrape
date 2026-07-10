@@ -38,11 +38,18 @@ MATERIAL_VOCAB = {
     "marble", "granite", "wood", "stone", "concrete", "terrazzo", "metal",
     "ceramic", "porcelain", "glass", "fabric", "leather", "laminate", "quartz",
 }
-# a sentence citing only the image (img1) is allowed only for a visual claim
+# a sentence citing only the image (img1) is allowed only for a visual claim.
+# Covers visual descriptors, colour names, and form/shape words (all observable
+# from a photo) — kept broad on purpose: a false reject blocks legitimate copy.
 _VISUAL_LEXICON = {
-    "colour", "color", "tone", "shade", "pattern", "grain", "veining", "vein",
-    "texture", "finish", "matte", "glossy", "look", "hue", "wood", "marble",
-    "stone", "surface", "speckled", "mottled", "geometric", "floral",
+    "colour", "color", "coloration", "tone", "shade", "pattern", "grain", "veining",
+    "vein", "texture", "finish", "matte", "glossy", "look", "hue", "surface",
+    "speckled", "mottled", "geometric", "floral", "appearance", "appears", "visual",
+    "visually", "design", "form", "shape", "silhouette", "profile", "contour",
+    "curved", "wavy", "folded", "fold", "round", "square", "rectangular", "slim",
+    "sleek", "predominant", "white", "black", "grey", "gray", "brown", "beige",
+    "blue", "green", "red", "olive", "orange", "yellow", "pink", "gold", "silver",
+    "cream", "ivory", "charcoal", "navy", "teal", "walnut", "oak", "terracotta",
 } | MATERIAL_VOCAB
 # banned phrase -> the input token that would justify it (None = always banned)
 _BANNED = {
@@ -218,8 +225,12 @@ def gemini_client(model: str = "gemini-2.5-flash"):
             json={"contents": [{"parts": parts}],
                   "generationConfig": {"responseMimeType": "application/json"}},
             timeout=60)
-        txt = r.json()["candidates"][0]["content"]["parts"][0]["text"]
-        return json.loads(txt)
+        body = r.json()
+        if r.status_code != 200 or "candidates" not in body:
+            # surface quota/safety errors clearly instead of a bare KeyError
+            raise RuntimeError(f"gemini {r.status_code}: "
+                               f"{(body.get('error') or {}).get('status', body)}")
+        return json.loads(body["candidates"][0]["content"]["parts"][0]["text"])
 
     return _call
 

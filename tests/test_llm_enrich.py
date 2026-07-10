@@ -71,6 +71,14 @@ def test_banned_property_allowed_only_if_in_input():
     assert le.verify(o, FMAP, INPUT + "\nf4 [notes]: waterproof") == []   # now justified
 
 
+def test_visual_colour_and_shape_claims_are_allowed_img_only():
+    # eval found these wrongly rejected: legit visual copy citing only the image
+    for text in ("The lamp has a white appearance.", "A distinct folded texture.",
+                 "Its wavy design is olive in tone."):
+        o = _good(); o["description"] = [{"text": text, "sources": ["img1"]}]
+        assert le.verify(o, FMAP, INPUT) == [], text
+
+
 def test_out_of_vocab_tag_fails():
     o = _good(); o["style_tags"] = [{"tag": "steampunk", "sources": ["img1"]}]
     assert any("out-of-vocab" in f for f in le.verify(o, FMAP, INPUT))
