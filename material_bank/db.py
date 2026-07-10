@@ -19,7 +19,7 @@ from urllib.parse import urlparse
 
 from .models import NormalizedProduct, PriceObservation, Supplier
 
-SCHEMA_VERSION = 16
+SCHEMA_VERSION = 17
 
 _REPO_ROOT = Path(__file__).resolve().parent.parent
 DEFAULT_DB_PATH = _REPO_ROOT / "data" / "catalog.db"
@@ -409,6 +409,17 @@ _MIGRATIONS = (
         ALTER TABLE products ADD COLUMN colour_scored_at TEXT;
         """,
      "image-derived colour: colour_primary/secondary/confidence"),
+    # Stage B: LLM enrichment. Generated content is BONUS — it lives in its own
+    # column, carries basis generated:llm:*, and never counts toward the
+    # completeness score that feeds the publish gate (the honesty guarantee stays
+    # on measured fields). llm_hash is the novelty gate; llm_status the outcome.
+    (17, """
+        ALTER TABLE products ADD COLUMN llm_content TEXT;
+        ALTER TABLE products ADD COLUMN llm_hash TEXT;
+        ALTER TABLE products ADD COLUMN llm_status TEXT;
+        ALTER TABLE products ADD COLUMN llm_enriched_at TEXT;
+        """,
+     "LLM enrichment: llm_content (bonus) + novelty hash + status"),
 )
 
 
