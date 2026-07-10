@@ -22,7 +22,7 @@ import sqlite3
 
 from .db import now_iso
 
-PROMPT_VERSION = "v1"
+PROMPT_VERSION = "v2"
 
 STYLE_VOCAB = {
     "modern", "contemporary", "traditional", "rustic", "industrial", "minimalist",
@@ -92,7 +92,13 @@ Rules (prompt {PROMPT_VERSION}):
 
 
 def build_prompt(input_text: str, has_image: bool) -> str:
-    return (f"{SYSTEM_PROMPT}\nINPUT FIELDS:\n{input_text}\n"
+    return (f"{SYSTEM_PROMPT}\n"
+            f"ALLOWED style_tags — pick ONLY from these (design styles), or [] if none fit; "
+            f"NEVER put a colour/finish/material word here: {sorted(STYLE_VOCAB)}\n"
+            f"ALLOWED use_case_tags — ONLY from: {sorted(USE_CASE_VOCAB)}\n"
+            f"vision.material_look — ONLY one of {sorted(MATERIAL_VOCAB)} or \"unknown\".\n"
+            f"vision.colour_primary — a single common colour word or \"unknown\".\n"
+            f"INPUT FIELDS:\n{input_text}\n"
             f"IMAGE: {'img1 attached' if has_image else 'none'}\n"
             "Return JSON: {description:[{text,sources[]}], style_tags:[{tag,sources[]}], "
             "use_case_tags:[{tag,sources[]}], vision:{colour_primary:{value,confidence}, "
