@@ -110,7 +110,18 @@ def _float(v):
 
 def _next_data(html: str) -> dict:
     m = re.search(r'<script id="__NEXT_DATA__"[^>]*>(.*?)</script>', html or "", re.S)
-    return json.loads(m.group(1)) if m else {}
+    try:
+        d = json.loads(m.group(1)) if m else {}
+    except (ValueError, TypeError):
+        return {}
+    return d if isinstance(d, dict) else {}
+
+
+def _page_props(html: str) -> dict:
+    """The Next.js pageProps dict, or {} — tolerant of missing/odd shapes."""
+    props = _next_data(html).get("props")
+    pp = props.get("pageProps") if isinstance(props, dict) else None
+    return pp if isinstance(pp, dict) else {}
 
 
 # ── storage + region derivation ──────────────────────────────────────────────
@@ -191,9 +202,9 @@ def harvest_kajaria_dealers(conn, fetcher: Fetcher, *, limit_states: int | None 
 def harvest_orientbell_dealers(conn, fetcher: Fetcher, *, limit_states: int | None = None) -> dict:
     base = "https://www.orientbell.com"
     first = fetcher.get(f"{base}/store-locator/maharashtra")
-    nd = _next_data(first.text) if first.ok else {}
-    states_data = (nd.get("props", {}).get("pageProps", {}) or {}).get("statesData", [])
-    slugs = [re.sub(r"\s+", "-", (s.get("state") or "").lower()) for s in states_data]
+    states_data = _page_props(first.text).get("statesData", []) if first.ok else []
+    slugs = [re.sub(r"\s+", "-", (s.get("state") or "").lower())
+             for s in states_data if isinstance(s, dict)]
     slugs = [s for s in slugs if s] or ["maharashtra"]
     if limit_states:
         slugs = slugs[:limit_states]
@@ -202,10 +213,13 @@ def harvest_orientbell_dealers(conn, fetcher: Fetcher, *, limit_states: int | No
         rr = fetcher.get(f"{base}/store-locator/{slug}")
         if not rr.ok:
             continue
-        sd = (_next_data(rr.text).get("props", {}).get("pageProps", {}) or {}).get("storeData", {})
+        sd = _page_props(rr.text).get("storeData", {})
+        if not isinstance(sd, dict):     # some states return an empty list, not {}
+            continue
         recs = (sd.get("obtbs") or []) + (sd.get("nonObtbs") or [])
         rows = [{**parse_orientbell_store(x),
-                 "source_url": f"{base}/store-locator/{slug}"} for x in recs]
+                 "source_url": f"{base}/store-locator/{slug}"}
+                for x in recs if isinstance(x, dict)]
         total += store_dealers(conn, ORIENTBELL, rows)
     derive_regions(conn, ORIENTBELL)
     return {"domain": ORIENTBELL, "states": len(slugs), "dealers_added": total}
