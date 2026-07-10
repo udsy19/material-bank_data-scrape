@@ -171,6 +171,58 @@
   .stale { font-size: 13px; color: var(--color-signal-blue); }
   .empty { padding: 32px 0; text-align: center; color: var(--color-ash); }
 
+  /* Catalog browse — taxonomy facets + collapsed design cards */
+  .browse { margin-top: 56px; }
+  .browse-h { display: flex; flex-wrap: wrap; align-items: baseline; justify-content: space-between; gap: 8px; }
+  .browse-h .sub { font-size: 13px; letter-spacing: -0.13px; color: var(--color-ash); }
+  .facets { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 16px; }
+  .facet {
+    padding: 6px 12px; cursor: pointer; font-family: var(--font-sans);
+    font-size: 13px; font-weight: 500; letter-spacing: -0.13px; color: var(--color-charcoal);
+    background: var(--color-paper); border: 1px solid var(--color-mist); border-radius: 8px;
+    transition: border-color 0.15s ease, color 0.15s ease;
+  }
+  .facet:hover { border-color: var(--color-fog); }
+  .facet.on { border-color: var(--color-cerulean); color: var(--color-cerulean); }
+  .facet b { font-weight: 500; color: var(--color-fog); }
+  .facet.on b { color: var(--color-cerulean); }
+
+  /* design card = collapsed variant group: badge + price band */
+  .card .img { position: relative; }
+  .badge {
+    position: absolute; top: 8px; right: 8px; padding: 3px 8px;
+    font-size: 12px; font-weight: 500; letter-spacing: -0.12px; color: var(--color-parchment);
+    background: rgba(31, 31, 41, 0.72); backdrop-filter: blur(4px); -webkit-backdrop-filter: blur(4px);
+    border-radius: 6px;
+  }
+  .band { font-weight: 600; color: var(--color-graphite); }
+  .band .to { font-weight: 400; color: var(--color-ash); padding: 0 3px; }
+  .more-btn {
+    display: block; margin: 28px auto 0; padding: 9px 22px; cursor: pointer;
+    font-family: var(--font-sans); font-size: 14px; font-weight: 500; letter-spacing: -0.14px;
+    color: var(--color-cerulean); background: transparent;
+    border: 1px solid var(--color-mist); border-radius: 8px;
+  }
+  .more-btn:hover { border-color: var(--color-cerulean); }
+
+  /* modal trust line + variant table */
+  .trust {
+    display: inline-flex; align-items: center; gap: 8px; margin-top: 12px; padding: 5px 12px;
+    font-size: 13px; letter-spacing: -0.13px; color: var(--color-charcoal);
+    border: 1px solid var(--color-mist); border-radius: 8px;
+  }
+  .trust .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--color-cerulean); flex: none; }
+  .variants { margin-top: 8px; }
+  .vrow {
+    display: flex; align-items: center; gap: 12px; padding: 8px; cursor: pointer;
+    font-size: 13px; letter-spacing: -0.13px; border-bottom: 1px solid var(--color-mist);
+  }
+  .vrow:hover { background: var(--color-linen); }
+  .vrow .vsku { min-width: 116px; color: var(--color-ash); font-variant-numeric: tabular-nums; }
+  .vrow .vattrs { flex: 1; color: var(--color-charcoal); }
+  .vrow .vprice { font-weight: 600; color: var(--color-graphite); }
+  .vmore { margin-top: 8px; font-size: 13px; letter-spacing: -0.13px; color: var(--color-ash); }
+
   /* Suppliers — hairline pills */
   .suppliers { margin-top: 64px; }
   .slist { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 16px; }
@@ -241,6 +293,7 @@
     </span>
     <span class="brand">DSource Material Bank</span>
     <a href="#q">Search</a>
+    <a href="#catalog-h">Catalog</a>
     <a href="#suppliers">Suppliers</a>
   </nav>
   <h1>Real materials, honest prices.</h1>
@@ -261,6 +314,16 @@
   <div class="results-h" id="results-h" style="margin-top:48px; display:none;"></div>
   <section class="grid" id="results"></section>
   <div class="empty" id="empty" style="display:none;">No matches. Try a broader material, colour, or room word.</div>
+
+  <section class="browse" id="browse">
+    <div class="browse-h">
+      <div class="results-h" id="catalog-h">The verified catalog</div>
+      <div class="sub">One card per design · variants grouped · every record publish-gated</div>
+    </div>
+    <div class="facets" id="facets"></div>
+    <section class="grid" id="catalog" style="margin-top:20px;"></section>
+    <button class="more-btn" id="more" style="display:none;">Show more designs</button>
+  </section>
 
   <section class="suppliers" id="suppliers"></section>
 </main>
@@ -298,6 +361,58 @@ function cardHTML(r, i) {
     </div></article>`;
 }
 function escape(s){const d=document.createElement("div");d.textContent=s;return d.innerHTML;}
+
+// ── Catalog browse (collapsed design cards + taxonomy facets) ─────────
+let catFamily = null, catOffset = 0;
+const PAGE = 24;
+
+function bandHTML(min, max) {
+  if (min == null) return `<span class="noprice">price on request</span>`;
+  if (max == null || max === min) return `<span class="band">${money(min)}</span>`;
+  return `<span class="band">${money(min)}<span class="to">–</span>${money(max)}</span>`;
+}
+
+function designCardHTML(r, i) {
+  const im = r.image_url
+    ? `<img loading="lazy" src="${img(r.image_url)}" onerror="this.replaceWith(Object.assign(document.createElement('div'),{className:'ph',textContent:'no image'}))">`
+    : `<div class="ph">no image</div>`;
+  const badge = r.variant_count > 1 ? `<span class="badge">${r.variant_count} variants</span>` : "";
+  return `<article class="card" data-id="${r.id}" style="animation-delay:${Math.min(i * 20, 180)}ms">
+    <div class="img">${im}${badge}</div>
+    <div class="body">
+      <div class="t">${escape(r.title || "Untitled")}</div>
+      <div class="meta">${bandHTML(r.min_price, r.max_price)}</div>
+      <div class="src">${escape(r.supplier_domain || "")}</div>
+    </div></article>`;
+}
+
+async function loadTaxonomy() {
+  const t = await (await fetch("/api/taxonomy")).json();
+  const fams = (t.families || []).filter(f => f.family !== "Other").sort((a, b) => b.products - a.products);
+  const total = fams.reduce((s, f) => s + f.products, 0);
+  const chip = (label, fam, count) =>
+    `<button class="facet${fam === catFamily ? " on" : ""}" data-fam="${fam === null ? "" : escape(fam)}">${escape(label)} <b>${count.toLocaleString()}</b></button>`;
+  $("#facets").innerHTML = chip("All", null, total) + fams.map(f => chip(f.family, f.family, f.products)).join("");
+  document.querySelectorAll("#facets .facet").forEach(b => b.onclick = () => {
+    catFamily = b.dataset.fam || null;
+    document.querySelectorAll("#facets .facet").forEach(x => x.classList.toggle("on", x === b));
+    loadCatalog(true);
+  });
+}
+
+async function loadCatalog(reset) {
+  if (reset) { catOffset = 0; $("#catalog").innerHTML = ""; }
+  $("#more").style.display = "none";
+  const params = new URLSearchParams({ collapse: "true", limit: PAGE, offset: catOffset });
+  if (catFamily) params.set("family", catFamily);
+  const d = await (await fetch("/api/catalog?" + params)).json();
+  const items = d.items || [];
+  $("#catalog").insertAdjacentHTML("beforeend", items.map(designCardHTML).join(""));
+  document.querySelectorAll("#catalog .card").forEach(c => c.onclick = () => openProduct(c.dataset.id));
+  catOffset += items.length;
+  $("#catalog-h").textContent = `${d.total.toLocaleString()} ${catFamily ? escape(catFamily).toLowerCase() + " " : ""}designs`;
+  $("#more").style.display = catOffset < d.total ? "block" : "none";
+}
 
 async function loadStats() {
   const s = await (await fetch("/api/stats")).json();
@@ -345,6 +460,29 @@ async function search() {
   $("#results-h").scrollIntoView({behavior: "smooth", block: "start"});
 }
 
+const TIER_LABEL = {golden:"Golden record", reviewed:"Reviewed",
+                    auto_validated:"Auto-validated", unverified:"In enrichment"};
+
+function trustHTML(p) {
+  if (p.completeness == null) return "";
+  const tier = TIER_LABEL[p.verification_tier] || p.verification_tier || "";
+  const pub = p.publish_ready ? " · published" : " · in enrichment";
+  return `<div class="trust"><span class="dot"></span>${p.completeness}/100 complete · ${escape(tier)}${pub}</div>`;
+}
+
+function variantsHTML(vs) {
+  if (!vs || vs.length < 2) return "";
+  const rows = vs.slice(0, 14).map(v => {
+    const attrs = Object.entries(v.attrs || {})
+      .map(([k, val]) => `${k.replace("_mm", "").replace("size", "size ")}: ${val}`).join(" · ");
+    const pr = v.price ? money(v.price.price_inr) : `<span class="noprice">—</span>`;
+    return `<div class="vrow" data-id="${v.id}"><span class="vsku">${escape(v.sku || "")}</span>
+      <span class="vattrs">${escape(attrs || "—")}</span><span class="vprice">${pr}</span></div>`;
+  }).join("");
+  const more = vs.length > 14 ? `<div class="vmore">+${vs.length - 14} more variants</div>` : "";
+  return `<h2>${vs.length} variants — one design</h2><div class="variants">${rows}</div>${more}`;
+}
+
 async function openProduct(id) {
   const d = await (await fetch(`/api/product/${id}`)).json();
   const p = d.product;
@@ -355,17 +493,23 @@ async function openProduct(id) {
      <div class="img">${s.image_url?`<img loading="lazy" src="${img(s.image_url)}">`:`<div class="ph">no image</div>`}</div>
      <div class="body"><div class="t">${escape(s.title)}</div>
      <div class="src">${s.match} ${s.score}</div></div></article>`).join("");
+  const srcLink = p.source_url
+    ? ` · <a href="${escape(p.source_url)}" target="_blank" rel="noopener">view source ↗</a>` : "";
   $("#modal").innerHTML =
     `<button class="close" onclick="closeModal()" aria-label="Close">×</button>
      <h3>${escape(p.title||"Untitled")}</h3>
-     <div class="src">${escape(p.brand||"")} · ${escape(p.supplier_domain||"")} · ${escape(p.category||"")}
-        ${p.size_mm?"· "+p.size_mm:""} ${p.finish?"· "+p.finish:""}</div>
+     <div class="src">${escape(p.brand||"")} · ${escape(p.supplier_domain||"")} · ${escape(p.category_std||p.category||"")}
+        ${p.size_mm?"· "+p.size_mm:""} ${p.finish?"· "+p.finish:""}${srcLink}</div>
+     ${trustHTML(p)}
      <div style="margin-top:12px">${priceHTML(p.price)}</div>
      ${p.image_url?`<div class="img" style="max-width:280px;margin-top:16px;border:1px solid var(--color-mist);border-radius:12px;overflow:hidden"><img src="${img(p.image_url)}" style="width:100%;display:block"></div>`:""}
+     ${variantsHTML(d.variants)}
      <h2>Price observations</h2>
      <table class="obs"><tr><th>Price</th><th>Basis</th><th>Source</th><th>Observed</th></tr>${obs||'<tr><td colspan=4 class="noprice">none</td></tr>'}</table>
      ${sim?`<h2>Visually similar</h2><div class="simgrid">${sim}</div>`:""}`;
   $("#overlay").classList.add("on");
+  $("#modal").scrollTop = 0;
+  document.querySelectorAll("#modal .vrow").forEach(c=>c.onclick=()=>openProduct(c.dataset.id));
   document.querySelectorAll("#modal .simgrid .card").forEach(c=>c.onclick=()=>openProduct(c.dataset.id));
 }
 function closeModal(){ $("#overlay").classList.remove("on"); }
@@ -373,7 +517,8 @@ $("#overlay").onclick = e => { if (e.target.id === "overlay") closeModal(); };
 
 $("#go").onclick = search;
 $("#q").addEventListener("keydown", e => { if (e.key === "Enter") search(); });
-loadStats(); loadChips();
+$("#more").onclick = () => loadCatalog(false);
+loadStats(); loadChips(); loadTaxonomy(); loadCatalog(true);
 </script>
 </body>
 </html>
