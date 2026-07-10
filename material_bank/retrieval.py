@@ -327,7 +327,7 @@ def list_designs(
         prod AS (
             SELECT p.id, p.brand, p.title, p.category, p.family, p.category_std,
                    p.omniclass, p.image_url, p.source_url, p.supplier_domain,
-                   p.completeness, p.publish_ready,
+                   p.completeness, p.publish_ready, p.size_mm, p.finish,
                    COALESCE(p.variant_group_id, 'p' || p.id) AS gkey,
                    l.price_inr AS price
             FROM products p
@@ -336,7 +336,9 @@ def list_designs(
         ),
         agg AS (
             SELECT gkey, COUNT(*) AS variant_count,
-                   MIN(price) AS min_price, MAX(price) AS max_price
+                   MIN(price) AS min_price, MAX(price) AS max_price,
+                   GROUP_CONCAT(DISTINCT size_mm) AS size_set,
+                   GROUP_CONCAT(DISTINCT finish) AS finish_set
             FROM prod GROUP BY gkey
         ),
         rep AS (
@@ -365,11 +367,21 @@ def list_designs(
         SELECT rep.id, rep.brand, rep.title, rep.category, rep.family,
                rep.category_std, rep.omniclass, rep.image_url, rep.source_url,
                rep.supplier_domain, rep.completeness, rep.publish_ready, rep.gkey,
-               agg.variant_count, agg.min_price, agg.max_price
+               agg.variant_count, agg.min_price, agg.max_price,
+               agg.size_set, agg.finish_set
         FROM rep JOIN agg ON agg.gkey = rep.gkey
         WHERE rep.rn = 1{band_clause}
         ORDER BY agg.variant_count DESC, rep.completeness DESC, rep.id
         LIMIT ? OFFSET ?""",
         [*params, *band_params, limit, offset]).fetchall()
+
+    def _set(v):
+        return sorted({x.strip() for x in (v or "").split(",") if x.strip()})
+    items = []
+    for r in rows:
+        d = dict(r)
+        d["size_set"] = _set(d.pop("size_set", ""))
+        d["finish_set"] = _set(d.pop("finish_set", ""))
+        items.append(d)
     return {"total": total, "count": len(rows), "limit": limit, "offset": offset,
-            "items": [dict(r) for r in rows]}
+            "items": items}

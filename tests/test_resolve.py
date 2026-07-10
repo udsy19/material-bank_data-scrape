@@ -85,6 +85,28 @@ def test_list_designs_collapses_to_one_card_with_band(conn):
     assert list_designs(conn, max_price=9000)["total"] == 1    # only dual's low end
 
 
+def test_list_designs_rolls_up_variant_axes(conn):
+    _add(conn, "dc-s", "Dual Comfort Mattress", size_mm="1830x910", finish="Firm", price=8999)
+    _add(conn, "dc-q", "Dual Comfort Mattress", size_mm="1980x1520", finish="Soft", price=14999)
+    resolve.assign_variant_groups(conn)
+    card = list_designs(conn)["items"][0]
+    assert sorted(card["size_set"]) == ["1830x910", "1980x1520"]
+    assert sorted(card["finish_set"]) == ["Firm", "Soft"]
+
+
+def test_audit_flags_suspect_grouping(conn):
+    # a generic title colliding a ₹500 item and a ₹50,000 item = >20x spread
+    from material_bank.db import upsert_product
+    for sku, price in [("g1", 500), ("g2", 50000)]:
+        pid = _add(conn, sku, "Designer Wall Panel", price=price)
+    # force them into one group id to simulate a mis-group
+    conn.execute("UPDATE products SET variant_group_id='grp-suspect' "
+                 "WHERE title='Designer Wall Panel'")
+    conn.commit()
+    audit = resolve.audit_variant_groups(conn)
+    assert audit["suspect_count"] == 1
+
+
 def test_list_designs_respects_publish_gate(conn):
     # unpriced -> below gate; priced+complete -> above. collapsed catalog is gated.
     _add(conn, "dc-single", "Dual Comfort Mattress", size_mm="1830x910", price=8999,

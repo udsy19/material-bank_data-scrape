@@ -410,11 +410,16 @@ function designCardHTML(r, i) {
     ? `<img loading="lazy" src="${img(r.image_url)}" onerror="this.replaceWith(Object.assign(document.createElement('div'),{className:'ph',textContent:'no image'}))">`
     : `<div class="ph">no image</div>`;
   const badge = r.variant_count > 1 ? `<span class="badge">${r.variant_count} variants</span>` : "";
+  const axes = [];
+  if ((r.size_set || []).length > 1) axes.push(`${r.size_set.length} sizes`);
+  if ((r.finish_set || []).length > 1) axes.push(`${r.finish_set.length} finishes`);
+  const axisLine = axes.length ? `<div class="src">${axes.join(" · ")}</div>` : "";
   return `<article class="card" data-id="${r.id}" style="animation-delay:${Math.min(i * 20, 180)}ms">
     <div class="img">${im}${badge}</div>
     <div class="body">
       <div class="t">${escape(r.title || "Untitled")}</div>
       <div class="meta">${bandHTML(r.min_price, r.max_price)}</div>
+      ${axisLine}
       <div class="src">${escape(r.supplier_domain || "")}</div>
     </div></article>`;
 }

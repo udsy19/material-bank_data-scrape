@@ -106,6 +106,29 @@ def variants_of(conn: sqlite3.Connection, product_id: int) -> list[dict]:
     return out
 
 
+def audit_variant_groups(conn: sqlite3.Connection) -> dict:
+    """Flag suspect variant groups — a free auditor of grouping quality. A group
+    whose members span >1 canonical category, or whose fresh prices spread >20x,
+    was probably mis-grouped (a generic title collided unrelated SKUs). Reported
+    as a data-quality metric; the samples are the review/self-repair work-list."""
+    rows = conn.execute("""
+        WITH latest AS (
+            SELECT product_id, price_inr,
+                   ROW_NUMBER() OVER (PARTITION BY product_id ORDER BY observed_at DESC) rn
+            FROM price_observation),
+        g AS (
+            SELECT p.variant_group_id AS gid,
+                   COUNT(DISTINCT p.category_std) AS ncat,
+                   MIN(l.price_inr) AS mn, MAX(l.price_inr) AS mx, COUNT(*) AS n
+            FROM products p LEFT JOIN latest l ON l.product_id = p.id AND l.rn = 1
+            WHERE p.variant_group_id IS NOT NULL
+            GROUP BY p.variant_group_id)
+        SELECT gid, ncat, mn, mx, n FROM g
+        WHERE ncat > 1 OR (mn IS NOT NULL AND mn > 0 AND mx > 20 * mn)
+        ORDER BY (mx / NULLIF(mn, 0)) DESC""").fetchall()
+    return {"suspect_count": len(rows), "samples": [dict(r) for r in rows[:10]]}
+
+
 def main(argv=None) -> int:
     import argparse
     import json
