@@ -17,12 +17,14 @@ from .quality import quality_report, score_all, snapshot_metrics
 def run_planner(db_path: str | Path | None = None) -> dict:
     from .enrich import seed_enrich_jobs   # late import: enrich pulls in fetch
 
+    from .resolve import assign_variant_groups
     from .taxonomy import classify_all
 
     conn = db.connect(str(db_path or db.DEFAULT_DB_PATH), check_same_thread=False)
     db.migrate(conn)
     classify_all(conn)          # canonical taxonomy before scoring
     summary = score_all(conn)
+    variants = assign_variant_groups(conn)  # group SKUs into design families
     snapshot_rows = snapshot_metrics(conn)
     enrich_jobs = seed_enrich_jobs(conn)    # measured gaps -> queued work
     report = quality_report(conn)
@@ -31,6 +33,8 @@ def run_planner(db_path: str | Path | None = None) -> dict:
             "median_completeness": report["median_completeness"],
             "tiers": report["tiers"], "snapshot_rows": snapshot_rows,
             "enrich_jobs_seeded": enrich_jobs,
+            "variant_groups": variants["groups"],
+            "grouped_products": variants["grouped_products"],
             "worst_categories": report["worst_categories"][:5]}
 
 

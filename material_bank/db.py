@@ -19,7 +19,7 @@ from urllib.parse import urlparse
 
 from .models import NormalizedProduct, PriceObservation, Supplier
 
-SCHEMA_VERSION = 12
+SCHEMA_VERSION = 13
 
 _REPO_ROOT = Path(__file__).resolve().parent.parent
 DEFAULT_DB_PATH = _REPO_ROOT / "data" / "catalog.db"
@@ -305,6 +305,16 @@ _MIGRATIONS = (
                         AND po2.source_url IS NOT NULL AND TRIM(po2.source_url) != '');
         """,
      "backfill products.source_url from price_observation (pre-v8 rows)"),
+    # Phase C (One Product, One Truth): non-destructive variant grouping. Same
+    # design, many SKUs (a mattress in 200 size×thickness combos) -> one
+    # variant_group_id; the catalog collapses to one card per design, the SKUs
+    # are all kept. NULL = singleton (its own canonical).
+    (13, """
+        ALTER TABLE products ADD COLUMN variant_group_id TEXT;
+        ALTER TABLE products ADD COLUMN resolved_at TEXT;
+        CREATE INDEX IF NOT EXISTS idx_products_variant ON products(variant_group_id);
+        """,
+     "variant grouping: variant_group_id + resolved_at"),
 )
 
 

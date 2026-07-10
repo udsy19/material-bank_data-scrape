@@ -157,6 +157,40 @@ def test_quality_endpoint_shape(client):
     assert q["products"] == 3
 
 
+def test_catalog_collapse_and_product_variants(client):
+    from material_bank.harvest.common import build_product
+    from material_bank.models import PriceBasis, PriceObservation
+    from material_bank.quality import score_all
+    from material_bank.resolve import assign_variant_groups
+    # two variants of one design (same title, distinct SKUs) + prices/specs so
+    # they clear the gate
+    ids = []
+    for sku, size, price in [("dc-s", "1830x910", 8999), ("dc-q", "1980x1520", 14999)]:
+        p = build_product(brand="Wakefit", sku=sku, title="Dual Comfort Mattress",
+                          category="mattresses", source=f"https://w/{sku}",
+                          image_url="https://img/m.jpg", size_mm=size, finish="Firm",
+                          price_unit="per_piece", coverage_sqft_per_box=1.0)
+        pid = db_mod.upsert_product(client.conn, p, supplier_domain="wakefit.co")
+        db_mod.add_price_observation(client.conn, pid, PriceObservation(
+            source="wakefit.co", price_inr=price, basis=PriceBasis.LISTED_MRP,
+            observed_at=db_mod.now_iso(), source_url=f"https://w/{sku}"))
+        ids.append(pid)
+    score_all(client.conn)
+    assign_variant_groups(client.conn)
+
+    # collapsed catalog: the two SKUs show as ONE design card with a price band
+    d = client.get("/api/catalog", params={"collapse": True, "supplier": "wakefit.co"}).json()
+    assert d["total"] == 1
+    card = d["items"][0]
+    assert card["variant_count"] == 2
+    assert card["min_price"] == 8999 and card["max_price"] == 14999
+
+    # product detail exposes sibling variants with their own prices
+    detail = client.get(f"/api/product/{ids[0]}").json()
+    assert len(detail["variants"]) == 2
+    assert {v["price"]["price_inr"] for v in detail["variants"]} == {8999, 14999}
+
+
 def test_taxonomy_endpoint_and_family_filter(client):
     from material_bank.taxonomy import classify_all
     classify_all(client.conn)

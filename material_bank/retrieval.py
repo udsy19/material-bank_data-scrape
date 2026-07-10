@@ -220,8 +220,104 @@ def list_products(
                    p.price_unit, p.coverage_sqft_per_box, p.image_url, p.source_url,
                    p.supplier_domain, l.price_inr, l.basis AS price_basis,
                    p.completeness, p.verification_tier, p.publish_ready,
-                   p.family, p.category_std, p.omniclass
+                   p.family, p.category_std, p.omniclass, p.variant_group_id
             {base} ORDER BY {order_col} {direction}, p.id LIMIT ? OFFSET ?""",
         [*params, limit, offset]).fetchall()
+    return {"total": total, "count": len(rows), "limit": limit, "offset": offset,
+            "items": [dict(r) for r in rows]}
+
+
+def list_designs(
+    conn: sqlite3.Connection,
+    *,
+    supplier: str | None = None,
+    family: str | None = None,
+    category_std: str | None = None,
+    q: str | None = None,
+    min_price: float | None = None,
+    max_price: float | None = None,
+    publish_ready: bool | None = None,
+    limit: int = 50,
+    offset: int = 0,
+) -> dict:
+    """Design-level (collapsed) listing: one row per variant group, with a
+    representative (the most-complete member), the variant count, and the
+    group's price band. Singletons are their own design. This is the
+    Material-Bank-style catalog card — every SKU is kept, just grouped.
+
+    Filters apply to *members* before grouping, so counts/bands reflect only
+    matching variants (e.g. a publish-gated view counts publishable variants).
+    """
+    limit = max(1, min(int(limit), 200))
+    offset = max(0, int(offset))
+    where: list[str] = []
+    params: list = []
+    if supplier:
+        where.append("p.supplier_domain = ?"); params.append(supplier)
+    if family:
+        where.append("p.family = ?"); params.append(family)
+    if category_std:
+        where.append("p.category_std = ?"); params.append(category_std)
+    if q:
+        where.append("p.title LIKE ?"); params.append(f"%{q}%")
+    if publish_ready is True:
+        where.append("p.publish_ready = 1")
+    elif publish_ready is False:
+        where.append("p.publish_ready = 0")
+    clause = ("WHERE " + " AND ".join(where)) if where else ""
+
+    cte = f"""
+        WITH latest AS (
+            SELECT product_id, price_inr,
+                   ROW_NUMBER() OVER (PARTITION BY product_id ORDER BY observed_at DESC) rn
+            FROM price_observation
+        ),
+        prod AS (
+            SELECT p.id, p.brand, p.title, p.category, p.family, p.category_std,
+                   p.omniclass, p.image_url, p.source_url, p.supplier_domain,
+                   p.completeness, p.publish_ready,
+                   COALESCE(p.variant_group_id, 'p' || p.id) AS gkey,
+                   l.price_inr AS price
+            FROM products p
+            LEFT JOIN latest l ON l.product_id = p.id AND l.rn = 1
+            {clause}
+        ),
+        agg AS (
+            SELECT gkey, COUNT(*) AS variant_count,
+                   MIN(price) AS min_price, MAX(price) AS max_price
+            FROM prod GROUP BY gkey
+        ),
+        rep AS (
+            SELECT prod.*,
+                   ROW_NUMBER() OVER (PARTITION BY gkey
+                                      ORDER BY completeness DESC, id) AS rn
+            FROM prod
+        )
+    """
+    # price-band filter on the group (agg): a design matches if its band overlaps
+    band: list[str] = []
+    band_params: list = []
+    if min_price is not None:
+        band.append("agg.max_price >= ?"); band_params.append(float(min_price))
+    if max_price is not None:
+        band.append("agg.min_price <= ?"); band_params.append(float(max_price))
+    band_clause = (" AND " + " AND ".join(band)) if band else ""
+
+    total = conn.execute(
+        f"""{cte}
+        SELECT COUNT(*) FROM agg
+        {('WHERE ' + ' AND '.join(band)) if band else ''}""",
+        [*params, *band_params]).fetchone()[0]
+    rows = conn.execute(
+        f"""{cte}
+        SELECT rep.id, rep.brand, rep.title, rep.category, rep.family,
+               rep.category_std, rep.omniclass, rep.image_url, rep.source_url,
+               rep.supplier_domain, rep.completeness, rep.publish_ready, rep.gkey,
+               agg.variant_count, agg.min_price, agg.max_price
+        FROM rep JOIN agg ON agg.gkey = rep.gkey
+        WHERE rep.rn = 1{band_clause}
+        ORDER BY agg.variant_count DESC, rep.completeness DESC, rep.id
+        LIMIT ? OFFSET ?""",
+        [*params, *band_params, limit, offset]).fetchall()
     return {"total": total, "count": len(rows), "limit": limit, "offset": offset,
             "items": [dict(r) for r in rows]}

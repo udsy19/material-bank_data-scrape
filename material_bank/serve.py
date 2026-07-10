@@ -17,6 +17,7 @@ from . import db, jobs
 from .retrieval import (
     freshest_price,
     hybrid_search,
+    list_designs,
     list_products,
     list_suppliers,
     stats,
@@ -111,14 +112,24 @@ def create_app(state_provider) -> FastAPI:
         q: str | None = None,
         min_price: float | None = None,
         max_price: float | None = None,
+        collapse: bool = False,
         order: str = Query("id", pattern="^(id|price|title|brand)$"),
         desc: bool = False,
         limit: int = Query(50, ge=1, le=200),
         offset: int = Query(0, ge=0),
     ) -> dict:
-        """The B2B catalog surface: publish-gated — only verified-complete records."""
+        """The B2B catalog surface: publish-gated — only verified-complete records.
+
+        ``collapse=true`` returns one card per design (variants grouped, with a
+        price band + variant count) instead of one row per SKU.
+        """
         s = S()
         with lock:
+            if collapse:
+                return list_designs(s["conn"], supplier=supplier, family=family,
+                                    category_std=category_std, q=q, min_price=min_price,
+                                    max_price=max_price, publish_ready=True,
+                                    limit=limit, offset=offset)
             return list_products(s["conn"], supplier=supplier, category=category, brand=brand,
                                  family=family, category_std=category_std,
                                  q=q, min_price=min_price, max_price=max_price,
@@ -156,6 +167,7 @@ def create_app(state_provider) -> FastAPI:
 
     @app.get("/api/product/{pid}")
     def api_product(pid: int) -> dict:
+        from .resolve import variants_of
         s = S()
         with lock:
             row = s["conn"].execute("SELECT * FROM products WHERE id=?", (pid,)).fetchone()
@@ -165,9 +177,11 @@ def create_app(state_provider) -> FastAPI:
                 "SELECT price_inr, price_unit, basis, observed_at, source, source_url "
                 "FROM price_observation WHERE product_id=? ORDER BY observed_at DESC", (pid,))]
             similar = _similar(s, pid)
+            variants = variants_of(s["conn"], pid)
             product = dict(row)
         product["price"] = freshest_price(s["conn"], pid)
-        return {"product": product, "observations": obs, "similar": similar}
+        return {"product": product, "observations": obs,
+                "variants": variants, "similar": similar}
 
     @app.get("/api/image")
     def api_image(url: str = Query(...)) -> Response:
