@@ -196,7 +196,7 @@ def run(conn: sqlite3.Connection, *, client, client_strong=None, model_name: str
     return stats
 
 
-def gemini_client(model: str = "gemini-2.0-flash"):
+def gemini_client(model: str = "gemini-2.5-flash"):
     """Default live client (batch/realtime Gemini). Requires GEMINI_API_KEY.
     Returns a callable(prompt, image_url) -> parsed JSON dict."""
     import os
