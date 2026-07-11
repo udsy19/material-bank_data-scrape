@@ -15,11 +15,11 @@ INPUT = "f1 [title]: Emperador Marble Tile\nf2 [category_std]: Tiles\nf3 [size_m
 def _good():
     return {
         "description": [
-            {"text": "A marble-look vitrified tile.", "sources": ["f1", "f2"]},
-            {"text": "Warm brown veining across the surface.", "sources": ["img1"]},
+            {"text": "A polished vitrified tile with soft marble veining.", "sources": ["f1", "f3"]},
+            {"text": "Warm brown tones lend a understated, classic surface.", "sources": ["img1"]},
         ],
         "style_tags": [{"tag": "modern", "sources": ["img1"]}],
-        "use_case_tags": [{"tag": "flooring", "sources": ["f2"]}],
+        "use_case_tags": [{"tag": "flooring", "sources": ["img1"]}],  # grounded in the image
         "vision": {"colour_primary": {"value": "Brown", "confidence": 0.7},
                    "material_look": {"value": "marble", "confidence": 0.8}},
     }
@@ -82,6 +82,46 @@ def test_visual_colour_and_shape_claims_are_allowed_img_only():
 def test_out_of_vocab_tag_fails():
     o = _good(); o["style_tags"] = [{"tag": "steampunk", "sources": ["img1"]}]
     assert any("out-of-vocab" in f for f in le.verify(o, FMAP, INPUT))
+
+
+# ── v3: usefulness checks (restatement, plumbing, tag discipline) ─────────────
+
+def test_restatement_filler_rejected():
+    # "It is from the brand Emperador Marble Tile" adds nothing over f1
+    o = _good()
+    o["description"] = [{"text": "This is the Emperador Marble Tile.", "sources": ["f1"]}]
+    assert any("restatement" in f for f in le.verify(o, FMAP, INPUT))
+
+
+def test_plumbing_in_prose_rejected():
+    for bad in ("Its supplier domain is orientbell.com.", "This falls under category standard Tiles.",
+                "The product is identified as f1."):
+        o = _good(); o["description"] = [{"text": bad, "sources": ["f1"]}]
+        fails = le.verify(o, {**FMAP, "f4": ("supplier_domain", "orientbell.com")}, INPUT)
+        assert any("plumbing" in f or "citation id" in f for f in fails), bad
+
+
+def test_too_many_tags_rejected():
+    o = _good()
+    o["use_case_tags"] = [{"tag": t, "sources": ["img1"]} for t in
+                          ("residential", "commercial", "hospitality", "office")]  # 4 > 3
+    assert any("too many" in f for f in le.verify(o, FMAP, INPUT))
+
+
+def test_tag_grounded_only_in_generic_field_rejected():
+    o = _good()
+    o["use_case_tags"] = [{"tag": "flooring", "sources": ["f2"]}]  # f2 = category_std (generic)
+    assert any("distinguishing" in f for f in le.verify(o, FMAP, INPUT))
+
+
+def test_empty_style_tags_is_fine():
+    o = _good(); o["style_tags"] = []
+    assert le.verify(o, FMAP, INPUT) == []
+
+
+def test_novelty_hash_is_version_prefixed():
+    h = le.novelty_hash("some input", "http://img")
+    assert h.startswith(le.PROMPT_VERSION + ":")
 
 
 # ── run loop ────────────────────────────────────────────────────────────────

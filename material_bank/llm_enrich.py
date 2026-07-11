@@ -22,7 +22,25 @@ import sqlite3
 
 from .db import now_iso
 
-PROMPT_VERSION = "v2"
+PROMPT_VERSION = "v3"
+
+# words that don't count as "new information" when checking for restatement filler
+_STOPWORDS = {
+    "a", "an", "the", "is", "are", "it", "its", "this", "that", "of", "for",
+    "with", "and", "or", "to", "in", "on", "from", "as", "by", "has", "have",
+    "which", "also", "be", "being", "at", "into", "features", "feature",
+}
+# meta / plumbing words: describing the record, not the product — never "new info"
+_PLUMBING_WORDS = {
+    "product", "item", "brand", "category", "supplier", "domain", "sku", "field",
+    "standard", "identified", "specified", "titled", "manufactured", "belongs",
+    "falls", "under", "named", "called", "listed", "record",
+}
+# tag sources that are too generic to justify a facet (a tag must trace to a
+# DISTINGUISHING attribute or the image, not just name/brand/category)
+_GENERIC_FIELDS = {"title", "brand", "category_std", "category", "supplier_domain"}
+_ID_IN_PROSE_RE = re.compile(r"\b(?:f\d+|img1)\b", re.I)
+_MAX_TAGS = 3
 
 STYLE_VOCAB = {
     "modern", "contemporary", "traditional", "rustic", "industrial", "minimalist",
@@ -85,24 +103,26 @@ def serialise(row) -> tuple[str, dict, str | None]:
 
 
 def novelty_hash(input_text: str, image_url: str | None) -> str:
-    return hashlib.sha1(f"{input_text}|{image_url or ''}".encode()).hexdigest()[:16]
+    """Version-prefixed so a prompt bump re-enriches: a record stored under v2 has
+    hash 'v2:...', which won't match the current 'v3:...' and is re-processed."""
+    sha = hashlib.sha1(f"{input_text}|{image_url or ''}".encode()).hexdigest()[:16]
+    return f"{PROMPT_VERSION}:{sha}"
 
 
-SYSTEM_PROMPT = f"""You write catalog copy for architectural materials, and you NEVER invent facts.
+SYSTEM_PROMPT = f"""You write SHORT, useful catalog copy for architectural materials, and you NEVER invent facts.
 Rules (prompt {PROMPT_VERSION}):
-- Every description sentence and every tag MUST cite the input field id(s) (f1, f2, ...) or the image (img1) it is based on.
-- Cite img1 only for visual claims (colour, pattern, texture, material look, finish).
-- Never state a number, dimension, standard code (ISO/IS/PEI/BIS), or material fact that is not in the input.
-- No superlatives or performance claims (waterproof, scratch-proof, best-in-class, outdoor-suitable) unless that exact property is in the input.
-- Controlled vocabularies only for tags. Output strict JSON matching the schema.
+- SYNTHESIZE, do not enumerate. 2-4 sentences that tell a buyer what it is, what it's like, and where it fits — NOT a restatement of the fields. A sentence that only repeats one field's value is banned.
+- NEVER write field ids (f1, img1), field names, the supplier domain, ".com", "category standard", or internal plumbing in the prose. Write for a customer, not about the database.
+- Every sentence and tag still CITES its source id(s) in the JSON `sources` array (not in the prose text). Cite img1 only for visual claims (colour, pattern, texture, material look, finish, shape).
+- Never state a number, dimension, or standard code (ISO/IS/PEI/BIS) not in the input. No superlatives or performance claims (waterproof, scratch-proof, best-in-class, outdoor) unless that exact property is in the input.
+- Tags: at most {_MAX_TAGS} style and {_MAX_TAGS} use-case tags. Prefer two right tags over six safe ones. A tag must be justified by a DISTINGUISHING attribute (size, finish, colour, the image) — not merely the name/brand/category. Empty style_tags ([]) is perfectly fine.
 """
 
 
 def build_prompt(input_text: str, has_image: bool) -> str:
     return (f"{SYSTEM_PROMPT}\n"
-            f"ALLOWED style_tags — pick ONLY from these (design styles), or [] if none fit; "
-            f"NEVER put a colour/finish/material word here: {sorted(STYLE_VOCAB)}\n"
-            f"ALLOWED use_case_tags — ONLY from: {sorted(USE_CASE_VOCAB)}\n"
+            f"ALLOWED style_tags (design styles only, [] if none fit): {sorted(STYLE_VOCAB)}\n"
+            f"ALLOWED use_case_tags: {sorted(USE_CASE_VOCAB)}\n"
             f"vision.material_look — ONLY one of {sorted(MATERIAL_VOCAB)} or \"unknown\".\n"
             f"vision.colour_primary — a single common colour word or \"unknown\".\n"
             f"INPUT FIELDS:\n{input_text}\n"
@@ -113,23 +133,42 @@ def build_prompt(input_text: str, has_image: bool) -> str:
             "self_report:{input_sufficient:bool,notes}}")
 
 
-def _sentences_ok(items, valid_ids, input_text):
+def _words(s: str) -> set:
+    return set(re.findall(r"[a-z0-9]+", (s or "").lower()))
+
+
+def _sentences_ok(items, fmap, input_text, supplier_domain):
+    valid_ids = set(fmap) | {"img1"}
     fails = []
     for it in items:
         if not isinstance(it, dict) or "text" not in it:
             return ["malformed description item"]
+        text = it["text"]
+        low = text.lower()
         srcs = it.get("sources") or []
         if not srcs or any(s not in valid_ids for s in srcs):
-            fails.append(f"bad/absent source cite: {it.get('text','')[:40]!r}")
-        if srcs == ["img1"] and not any(w in it["text"].lower() for w in _VISUAL_LEXICON):
-            fails.append(f"img-only cite on non-visual claim: {it['text'][:40]!r}")
-        for num in _NUM_RE.findall(it["text"]):
+            fails.append(f"bad/absent source cite: {text[:40]!r}")
+        if srcs == ["img1"] and not any(w in low for w in _VISUAL_LEXICON):
+            fails.append(f"img-only cite on non-visual claim: {text[:40]!r}")
+        # (1) no restatement filler: a text-only sentence that adds no word beyond
+        #     its cited fields' values (minus stop/plumbing words) is worthless.
+        if "img1" not in srcs:
+            field_words = _words(" ".join(fmap[s][1] for s in srcs if s in fmap))
+            novel = _words(text) - _STOPWORDS - _PLUMBING_WORDS - field_words
+            if not novel:
+                fails.append(f"restatement filler: {text[:40]!r}")
+        # (2) no plumbing in prose: field ids, field names, the domain, ".com"
+        if _ID_IN_PROSE_RE.search(text):
+            fails.append(f"citation id in prose: {text[:40]!r}")
+        if ".com" in low or "supplier domain" in low or "category standard" in low or (
+                supplier_domain and supplier_domain.lower() in low):
+            fails.append(f"plumbing in prose: {text[:40]!r}")
+        for num in _NUM_RE.findall(text):
             if num not in input_text:
                 fails.append(f"invented number {num!r}")
-        for std in _STD_RE.findall(it["text"]):
+        for std in _STD_RE.findall(text):
             if std.replace(" ", "").lower() not in input_text.replace(" ", "").lower():
                 fails.append(f"invented standard {std!r}")
-        low = it["text"].lower()
         for phrase, need in _BANNED.items():
             if phrase in low and (need is None or need not in input_text.lower()):
                 fails.append(f"banned phrase {phrase!r}")
@@ -141,6 +180,7 @@ def verify(output: dict, field_map: dict, input_text: str) -> list[str]:
     if not isinstance(output, dict):
         return ["not a JSON object"]
     valid_ids = set(field_map) | {"img1"}
+    supplier_domain = next((v for n, v in field_map.values() if n == "supplier_domain"), None)
     fails: list[str] = []
     for key in ("description", "style_tags", "use_case_tags", "vision"):
         if key not in output:
@@ -149,14 +189,26 @@ def verify(output: dict, field_map: dict, input_text: str) -> list[str]:
         return fails
     if not isinstance(output["description"], list) or not output["description"]:
         fails.append("description must be a non-empty list")
+    elif len(output["description"]) > 6:
+        fails.append("description too long (>6 sentences)")
     else:
-        fails += _sentences_ok(output["description"], valid_ids, input_text)
+        fails += _sentences_ok(output["description"], field_map, input_text, supplier_domain)
+    # (3) tag discipline: cap count; every tag must trace to a DISTINGUISHING
+    #     source (a non-generic field or the image), not just name/brand/category.
     for key, vocab in (("style_tags", STYLE_VOCAB), ("use_case_tags", USE_CASE_VOCAB)):
-        for it in output.get(key) or []:
+        tags = output.get(key) or []
+        if len(tags) > _MAX_TAGS:
+            fails.append(f"{key}: too many ({len(tags)} > {_MAX_TAGS})")
+        for it in tags:
             if not isinstance(it, dict) or it.get("tag") not in vocab:
                 fails.append(f"{key}: out-of-vocab {it.get('tag') if isinstance(it, dict) else it!r}")
-            elif not (it.get("sources") and all(s in valid_ids for s in it["sources"])):
+                continue
+            srcs = it.get("sources") or []
+            if not srcs or any(s not in valid_ids for s in srcs):
                 fails.append(f"{key}: bad source cite for {it.get('tag')!r}")
+            elif not ("img1" in srcs or any(field_map.get(s, ("", ""))[0] not in _GENERIC_FIELDS
+                                            for s in srcs if s in field_map)):
+                fails.append(f"{key}: {it['tag']!r} not grounded in a distinguishing attribute")
     v = output.get("vision") or {}
     ml = ((v.get("material_look") or {}).get("value"))
     if ml and ml != "unknown" and ml not in MATERIAL_VOCAB:
@@ -172,7 +224,8 @@ def run(conn: sqlite3.Connection, *, client, client_strong=None, model_name: str
     rows = conn.execute(
         f"SELECT id, {', '.join(_INPUT_FIELDS)}, image_url, llm_hash "
         "FROM products WHERE llm_status IS NULL OR llm_status='stale' "
-        "ORDER BY id LIMIT ?", (limit,)).fetchall()
+        "OR llm_hash NOT LIKE ? "                    # re-enrich rows below the current prompt version
+        "ORDER BY id LIMIT ?", (f"{PROMPT_VERSION}:%", limit)).fetchall()
     stats = {"scanned": len(rows), "enriched": 0, "failed": 0, "skipped_novelty": 0, "spend_inr": 0.0}
     for row in rows:
         input_text, fmap, image_url = serialise(row)
