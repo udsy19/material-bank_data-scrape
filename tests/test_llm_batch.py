@@ -99,20 +99,30 @@ def test_submit_records_job_and_submit_all_chunks(conn):
     assert conn.execute("SELECT COUNT(*) FROM llm_batch_jobs").fetchone()[0] >= 2
 
 
-def test_advance_stops_cleanly_on_quota_429(conn):
-    """A 429 mid-tick must end submission without crashing or marking rows — those
-    products stay eligible for the next tick."""
-    class QuotaT:
+import pytest as _pytest
+
+
+@_pytest.mark.parametrize("err", [
+    "batch submit 429: RESOURCE_EXHAUSTED",                       # quota
+    "batch submit 403: PERMISSION_DENIED Lightning dunning deny", # billing block
+    "batch submit 503: UNAVAILABLE",                             # transient
+])
+def test_advance_survives_any_submit_rejection(conn, err):
+    """No submit-side HTTP rejection (quota / billing / transient) may crash the
+    tick: collection already ran and the block self-clears, so the next tick must
+    be able to auto-resume. Rows stay untouched and eligible; the reason surfaces."""
+    class RejectT:
         def __init__(self): self._n = 0
         def submit(self, reqs):
             self._n += 1
             if self._n > 1:
-                raise RuntimeError("batch submit 429: RESOURCE_EXHAUSTED")
+                raise RuntimeError(err)
             return "operations/j1"
         def results(self, job): raise RuntimeError("not done yet")   # nothing to collect
-    out = lb.advance(conn, transport=QuotaT(), chunk=1, prepare=lambda u: None)
-    assert out["jobs_submitted"] == 1                    # one landed, then quota stopped it
+    out = lb.advance(conn, transport=RejectT(), chunk=1, prepare=lambda u: None)
+    assert out["jobs_submitted"] == 1                    # one landed, then the block stopped it
     assert out["remaining_unbatched"] >= 1               # the rest untouched, still eligible
+    assert out["submit_error"] and err.split(":")[1].strip()[:3] in out["submit_error"]
     assert conn.execute("SELECT COUNT(*) FROM llm_batch_jobs").fetchone()[0] == 1
 
 

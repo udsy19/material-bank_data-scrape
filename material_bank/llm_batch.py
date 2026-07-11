@@ -128,22 +128,26 @@ def advance(conn: sqlite3.Connection, *, transport, chunk: int = 1000,
     run on a short timer until the whole catalog is enriched — no live process to
     babysit, fully resumable."""
     ingest = collect_pending(conn, transport=transport, model_name=model_name)
-    submitted = 0
+    submitted, submit_error = 0, None
     for _ in range(max_submit_per_tick):
         try:
             out = submit_batch(conn, transport=transport, limit=chunk, prepare=prepare,
                                model_name=model_name, workers=workers)
         except RuntimeError as e:
-            if "429" in str(e) or "RESOURCE_EXHAUSTED" in str(e):
-                break                       # quota full; next tick retries post-drain
-            raise
+            # transport.submit only raises on an HTTP non-200 (quota 429, billing/perm
+            # 403, transient 5xx). NONE should crash the tick: collection already ran,
+            # and a submit block clears itself (quota drains, billing gets fixed) — so
+            # the next tick auto-resumes. Record it, stop submitting, exit clean.
+            submit_error = str(e)
+            break
         if not out["count"]:
             break                           # catalog exhausted
         submitted += 1
     remaining = conn.execute(
         "SELECT COUNT(*) FROM products WHERE (llm_status IS NULL OR llm_status='stale' "
         "OR llm_hash NOT LIKE ?) AND title IS NOT NULL", (f"{PROMPT_VERSION}:%",)).fetchone()[0]
-    return {**ingest, "jobs_submitted": submitted, "remaining_unbatched": remaining}
+    return {**ingest, "jobs_submitted": submitted, "remaining_unbatched": remaining,
+            "submit_error": submit_error}
 
 
 def collect_pending(conn: sqlite3.Connection, *, transport,
