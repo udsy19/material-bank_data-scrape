@@ -67,21 +67,65 @@ def _select(conn: sqlite3.Connection, limit: int):
 
 
 def submit_batch(conn: sqlite3.Connection, *, transport, limit: int = 5000,
-                 prepare=_prep_image) -> dict:
-    """Build requests for novelty-gated products and submit one batch job.
-    Marks submitted rows 'batched' (with the version-stamped hash) so a second
-    submit doesn't duplicate them. Returns {job_name, count}."""
+                 prepare=_prep_image, model_name: str = "gemini-flash-latest") -> dict:
+    """Build requests for novelty-gated products and submit ONE batch job. Records
+    the job in llm_batch_jobs (first-class, resumable) and marks its products
+    'batched' (version-stamped) so a resubmit never duplicates them."""
     rows = _select(conn, limit)
     if not rows:
         return {"job_name": None, "count": 0}
     requests = [build_batch_request(r, prepare=prepare) for r in rows]
     job_name = transport.submit(requests)
     ts = now_iso()
+    conn.execute("INSERT INTO llm_batch_jobs (job_name, model, prompt_version, "
+                 "product_count, status, submitted_at) VALUES (?,?,?,?,?,?)",
+                 (job_name, model_name, PROMPT_VERSION, len(rows), "submitted", ts))
     conn.executemany(
         "UPDATE products SET llm_status='batched', llm_hash=?, llm_enriched_at=? WHERE id=?",
         [(novelty_hash(*serialise(r)[::2]), ts, r["id"]) for r in rows])
     conn.commit()
     return {"job_name": job_name, "count": len(rows)}
+
+
+def submit_all(conn: sqlite3.Connection, *, transport, chunk: int = 5000,
+               max_products: int | None = None, prepare=_prep_image,
+               model_name: str = "gemini-flash-latest") -> dict:
+    """Submit the whole un-enriched catalog as chunked batch jobs. Resumable —
+    already-batched products are skipped, so a re-run only submits the remainder."""
+    jobs, total = [], 0
+    while max_products is None or total < max_products:
+        n = chunk if max_products is None else min(chunk, max_products - total)
+        out = submit_batch(conn, transport=transport, limit=n, prepare=prepare, model_name=model_name)
+        if not out["count"]:
+            break
+        jobs.append(out["job_name"]); total += out["count"]
+    return {"jobs": len(jobs), "products": total, "job_names": jobs}
+
+
+def collect_pending(conn: sqlite3.Connection, *, transport,
+                    model_name: str = "gemini-flash-latest") -> dict:
+    """Poll every still-submitted job; ingest the finished ones (verify + write +
+    ledger), mark them 'ingested'. Safe to run repeatedly on a timer until dry."""
+    pending = conn.execute("SELECT job_name FROM llm_batch_jobs WHERE status='submitted'").fetchall()
+    ingested, still = 0, 0
+    for j in pending:
+        try:
+            results = transport.results(j["job_name"])   # raises if not done yet
+        except Exception:
+            still += 1
+            continue
+        stats = collect_batch(conn, j["job_name"], transport=_Given(results), model_name=model_name)
+        conn.execute("UPDATE llm_batch_jobs SET status='ingested', ingested_at=?, result=? "
+                     "WHERE job_name=?", (now_iso(), json.dumps(stats), j["job_name"]))
+        conn.commit()
+        ingested += 1
+    return {"jobs_ingested": ingested, "jobs_pending": still}
+
+
+class _Given:
+    """Adapt an already-fetched results list to the transport interface."""
+    def __init__(self, results): self._results = results
+    def results(self, job_name): return self._results
 
 
 def collect_batch(conn: sqlite3.Connection, job_name: str, *, transport,
@@ -199,22 +243,27 @@ def main(argv=None) -> int:
     from . import db
 
     ap = argparse.ArgumentParser(prog="mb-llm-batch")
-    ap.add_argument("--submit", action="store_true")
-    ap.add_argument("--collect", metavar="JOB_NAME")
-    ap.add_argument("--limit", type=int, default=5000)
-    ap.add_argument("--model", default="gemini-2.5-flash")
+    ap.add_argument("--submit-all", action="store_true", help="submit the whole catalog in chunks")
+    ap.add_argument("--submit", action="store_true", help="submit one chunk")
+    ap.add_argument("--collect", action="store_true", help="poll + ingest all finished jobs")
+    ap.add_argument("--chunk", type=int, default=5000)
+    ap.add_argument("--max", type=int, default=None, help="cap products for --submit-all")
+    ap.add_argument("--model", default="gemini-flash-latest")
     ap.add_argument("--db", default=str(db.DEFAULT_DB_PATH))
     args = ap.parse_args(argv)
     conn = db.connect(args.db)
     db.migrate(conn)
     transport = GeminiBatchTransport(args.model)
-    if args.submit:
-        print(json.dumps(submit_batch(conn, transport=transport, limit=args.limit)), file=sys.stderr)
+    if args.submit_all:
+        out = submit_all(conn, transport=transport, chunk=args.chunk, max_products=args.max,
+                         model_name=args.model)
+    elif args.submit:
+        out = submit_batch(conn, transport=transport, limit=args.chunk, model_name=args.model)
     elif args.collect:
-        print(json.dumps(collect_batch(conn, args.collect, transport=transport,
-                                       model_name=args.model)), file=sys.stderr)
+        out = collect_pending(conn, transport=transport, model_name=args.model)
     else:
-        ap.error("one of --submit / --collect required")
+        ap.error("one of --submit-all / --submit / --collect required")
+    print(json.dumps(out), file=sys.stderr)
     conn.close()
     return 0
 

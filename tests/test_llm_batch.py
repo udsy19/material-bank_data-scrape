@@ -31,8 +31,10 @@ def _good_json():
 
 
 class FakeTransport:
-    def __init__(self, results): self._results = results; self.submitted = None
-    def submit(self, requests): self.submitted = requests; return "operations/batch-123"
+    def __init__(self, results): self._results = results; self.submitted = None; self._n = 0
+    def submit(self, requests):
+        self.submitted = requests; self._n += 1
+        return f"operations/batch-{self._n}"
     def results(self, job_name): return self._results
 
 
@@ -47,7 +49,7 @@ def test_build_batch_request_shape(conn):
 def test_submit_marks_rows_batched(conn):
     t = FakeTransport([])
     out = lb.submit_batch(conn, transport=t, limit=10, prepare=lambda u: None)
-    assert out["count"] == 2 and out["job_name"] == "operations/batch-123"
+    assert out["count"] == 2 and out["job_name"] == "operations/batch-1"
     assert len(t.submitted) == 2
     assert conn.execute("SELECT COUNT(*) FROM products WHERE llm_status='batched'").fetchone()[0] == 2
     # a second submit finds nothing new (already batched)
@@ -75,3 +77,30 @@ def test_collect_handles_error_result(conn):
     out = lb.collect_batch(conn, "j", transport=FakeTransport([{"key": str(ids[0]), "error": "quota"}]))
     assert out["failed"] == 1
     assert conn.execute("SELECT llm_status FROM products WHERE id=?", (ids[0],)).fetchone()[0] == "enrich_failed"
+
+
+def test_submit_records_job_and_submit_all_chunks(conn):
+    t = FakeTransport([])
+    lb.submit_batch(conn, transport=t, limit=1, prepare=lambda u: None)
+    j = conn.execute("SELECT status, product_count, prompt_version FROM llm_batch_jobs").fetchone()
+    assert j["status"] == "submitted" and j["product_count"] == 1
+    out = lb.submit_all(conn, transport=t, chunk=1, prepare=lambda u: None)  # chunk the rest
+    assert out["products"] >= 1
+    assert conn.execute("SELECT COUNT(*) FROM llm_batch_jobs").fetchone()[0] >= 2
+
+
+def test_collect_pending_ingests_finished_jobs(conn):
+    ids = [r[0] for r in conn.execute("SELECT id FROM products ORDER BY id")]
+
+    class T:
+        def submit(self, reqs): return "operations/j1"
+        def results(self, job): return [{"key": str(ids[0]), "text": _good_json(),
+                                         "usage": {"input_tokens": 100, "output_tokens": 50}}]
+    t = T()
+    lb.submit_batch(conn, transport=t, limit=1, prepare=lambda u: None)
+    out = lb.collect_pending(conn, transport=t)
+    assert out["jobs_ingested"] == 1
+    assert conn.execute("SELECT status FROM llm_batch_jobs").fetchone()[0] == "ingested"
+    assert conn.execute("SELECT COUNT(*) FROM products WHERE llm_status='enriched'").fetchone()[0] == 1
+    # idempotent: a second collect finds nothing pending
+    assert lb.collect_pending(conn, transport=t)["jobs_ingested"] == 0

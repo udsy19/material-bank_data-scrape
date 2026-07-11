@@ -19,7 +19,7 @@ from urllib.parse import urlparse
 
 from .models import NormalizedProduct, PriceObservation, Supplier
 
-SCHEMA_VERSION = 18
+SCHEMA_VERSION = 19
 
 _REPO_ROOT = Path(__file__).resolve().parent.parent
 DEFAULT_DB_PATH = _REPO_ROOT / "data" / "catalog.db"
@@ -445,6 +445,25 @@ _MIGRATIONS = (
         CREATE INDEX IF NOT EXISTS idx_llm_calls_status ON llm_calls(status);
         """,
      "llm_calls ledger: per-call tokens + ₹ cost + status (observability)"),
+    # Batch enrichment job tracking — batch is the production path (50% off) and
+    # async (24h SLA), so jobs are first-class, resumable objects: submit records
+    # a row, a collector polls + ingests, state survives restarts. Products in a
+    # submitted job are marked llm_status='batched' so they aren't resubmitted.
+    (19, """
+        CREATE TABLE IF NOT EXISTS llm_batch_jobs (
+            id            INTEGER PRIMARY KEY AUTOINCREMENT,
+            job_name      TEXT NOT NULL UNIQUE,   -- provider operation/batch id
+            model         TEXT,
+            prompt_version TEXT,
+            product_count INTEGER,
+            status        TEXT NOT NULL DEFAULT 'submitted',  -- submitted | ingested | failed
+            submitted_at  TEXT,
+            ingested_at   TEXT,
+            result        TEXT                    -- JSON ingest stats
+        );
+        CREATE INDEX IF NOT EXISTS idx_batch_jobs_status ON llm_batch_jobs(status);
+        """,
+     "llm_batch_jobs: first-class resumable batch jobs"),
 )
 
 
