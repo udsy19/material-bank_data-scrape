@@ -208,6 +208,24 @@ def create_app(state_provider) -> FastAPI:
         with lock:
             return events.demand_metrics(s["conn"])
 
+    @app.get("/api/llm")
+    def api_llm() -> dict:
+        """LLM-ops cockpit: spend (today/window/all-time), per-model + per-status,
+        verifier pass-rate, daily series — every ₹ derived from actual tokens."""
+        from . import llm_accounting as acct
+        s = S()
+        with lock:
+            return acct.llm_report(s["conn"])
+
+    @app.get("/api/llm/calls")
+    def api_llm_calls(limit: int = Query(50, ge=1, le=500), offset: int = Query(0, ge=0),
+                      status: str | None = None) -> dict:
+        """The raw ledger — every call, newest first (product, tokens, ₹, status)."""
+        from . import llm_accounting as acct
+        s = S()
+        with lock:
+            return acct.recent_calls(s["conn"], limit=limit, offset=offset, status=status)
+
     @app.get("/api/suppliers")
     def api_suppliers() -> dict:
         s = S()

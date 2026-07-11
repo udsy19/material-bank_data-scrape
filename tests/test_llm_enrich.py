@@ -140,9 +140,12 @@ def conn(tmp_path):
 
 
 def test_run_enriches_verifies_and_is_novelty_gated(conn):
-    client = lambda prompt, img: _good()
+    client = lambda prompt, img: {"output": _good(), "usage": {"input_tokens": 500, "output_tokens": 200}}
     out = le.run(conn, client=client, budget_inr=100)
     assert out["enriched"] == 1 and out["spend_inr"] > 0
+    # every call is on the ledger with a real cost
+    call = conn.execute("SELECT status, input_tokens, cost_inr FROM llm_calls").fetchone()
+    assert call["status"] == "enriched" and call["input_tokens"] == 500 and call["cost_inr"] > 0
     r = conn.execute("SELECT llm_status, llm_content FROM products").fetchone()
     assert r["llm_status"] == "enriched"
     assert json.loads(r["llm_content"])["_meta"]["basis"].startswith("generated:llm:")
@@ -161,7 +164,15 @@ def test_run_escalates_then_marks_failed(conn):
     assert conn.execute("SELECT llm_status FROM products").fetchone()[0] == "enrich_failed"
 
 
-def test_budget_circuit_breaker_stops_cleanly(conn):
-    # budget below one call -> breaks before calling, nothing enriched, no crash
-    out = le.run(conn, client=lambda p, i: _good(), budget_inr=0.1, cost_per_call=0.4)
-    assert out["enriched"] == 0 and out["scanned"] == 1
+def test_budget_circuit_breaker_stops_on_real_spend(conn):
+    # add a 2nd product so the breaker can fire between them
+    from material_bank.harvest.common import build_product
+    db_mod.upsert_product(conn, build_product(brand="B", sku="t2", title="Second Marble Tile",
+        category="tiles", source="u2", image_url="https://i/y.jpg", size_mm="300x300"),
+        supplier_domain="orientbell.com")
+    conn.commit()
+    costly = lambda p, i: {"output": _good(), "usage": {"input_tokens": 1_000_000, "output_tokens": 1_000_000}}
+    out = le.run(conn, client=costly, budget_inr=1.0)      # one call ~₹200 >> ₹1 budget
+    assert out["enriched"] == 1                             # first processed, then breaker fires
+    assert conn.execute("SELECT COUNT(*) FROM products WHERE llm_status IS NULL").fetchone()[0] == 1
+    assert out["spend_inr"] > 1.0

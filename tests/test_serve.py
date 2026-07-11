@@ -157,6 +157,25 @@ def test_quality_endpoint_shape(client):
     assert q["products"] == 3
 
 
+def test_llm_ops_endpoints(client):
+    from material_bank import llm_accounting as acct
+    # empty ledger reads honest zeros
+    r0 = client.get("/api/llm").json()
+    assert r0["all_time"]["calls"] == 0 and r0["spend_today_inr"] == 0
+    assert r0["rates"]["usd_inr"] == acct.USD_INR
+    # log a couple of calls, then the cockpit + raw ledger reflect them
+    acct.log_call(client.conn, product_id=1, model="gemini-2.5-flash", phase="realtime",
+                  attempt=0, input_tokens=1000, output_tokens=400, status="enriched")
+    acct.log_call(client.conn, product_id=1, model="gemini-2.5-flash", phase="realtime",
+                  attempt=0, status="api_error", fail_reason="quota")
+    client.conn.commit()
+    r = client.get("/api/llm").json()
+    assert r["all_time"]["calls"] == 2 and r["spend_today_inr"] > 0
+    calls = client.get("/api/llm/calls", params={"limit": 10}).json()
+    assert calls["total"] == 2 and calls["items"][0]["status"] in ("enriched", "api_error")
+    assert client.get("/api/llm/calls", params={"status": "api_error"}).json()["total"] == 1
+
+
 def test_supplier_detail_endpoint_and_embedded_block(client):
     conn = client.conn
     conn.execute("INSERT INTO suppliers (domain, brand, status, legal_name, phones, "

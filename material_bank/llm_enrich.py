@@ -216,34 +216,58 @@ def verify(output: dict, field_map: dict, input_text: str) -> list[str]:
     return fails
 
 
-def run(conn: sqlite3.Connection, *, client, client_strong=None, model_name: str = "gemini-flash",
-        budget_inr: float | None = None, cost_per_call: float = 0.4, limit: int = 100) -> dict:
-    """Novelty-gated, budget-capped enrichment pass. ``client(prompt, image_url)``
-    returns a parsed JSON dict (or raises). Failures retry once, then escalate to
-    ``client_strong``, then mark enrich_failed (honest absence, never hand-waved)."""
+def _unpack(res):
+    """Accept a rich client result {output, usage} or a bare output dict (fakes)."""
+    if isinstance(res, dict) and "output" in res and "usage" in res:
+        return res["output"], res.get("usage") or {}
+    return res, {}
+
+
+def run(conn: sqlite3.Connection, *, client, client_strong=None, model_name: str = "gemini-2.5-flash",
+        budget_inr: float | None = None, limit: int = 100, phase: str = "realtime") -> dict:
+    """Novelty-gated, budget-capped enrichment pass. Every API call — including
+    retries, escalations, and failures — is logged to the llm_calls ledger with
+    its actual tokens + ₹ cost; the budget circuit-breaker reads REAL spend from
+    that ledger. Failures retry once, then escalate, then mark enrich_failed."""
+    import time
+
+    from . import llm_accounting as acct
     rows = conn.execute(
         f"SELECT id, {', '.join(_INPUT_FIELDS)}, image_url, llm_hash "
         "FROM products WHERE llm_status IS NULL OR llm_status='stale' "
         "OR llm_hash NOT LIKE ? "                    # re-enrich rows below the current prompt version
         "ORDER BY id LIMIT ?", (f"{PROMPT_VERSION}:%", limit)).fetchall()
-    stats = {"scanned": len(rows), "enriched": 0, "failed": 0, "skipped_novelty": 0, "spend_inr": 0.0}
+    stats = {"scanned": len(rows), "enriched": 0, "failed": 0, "skipped_novelty": 0,
+             "api_errors": 0, "spend_inr": 0.0}
     for row in rows:
         input_text, fmap, image_url = serialise(row)
         h = novelty_hash(input_text, image_url)
         if row["llm_hash"] == h:
             stats["skipped_novelty"] += 1
             continue
-        if budget_inr is not None and stats["spend_inr"] + cost_per_call > budget_inr:
-            break                                     # circuit breaker: pause, don't crash
+        if budget_inr is not None and acct.spend_since(conn, 1) >= budget_inr:
+            break                                     # circuit breaker on REAL daily spend
         prompt = build_prompt(input_text, bool(image_url))
         out, ok = None, False
         for attempt, cl in enumerate((client, client, client_strong or client)):
+            t0 = time.monotonic()
             try:
-                out = cl(prompt, image_url)
-                stats["spend_inr"] += cost_per_call * (2 if attempt == 2 else 1)
-            except Exception:
+                res = cl(prompt, image_url)
+            except Exception as exc:
+                acct.log_call(conn, product_id=row["id"], model=model_name, phase=phase,
+                              attempt=attempt, latency_ms=int((time.monotonic() - t0) * 1000),
+                              status="api_error", fail_reason=str(exc), prompt_version=PROMPT_VERSION)
+                stats["api_errors"] += 1
                 continue
-            if not verify(out, fmap, input_text):
+            latency = int((time.monotonic() - t0) * 1000)
+            out, usage = _unpack(res)
+            fails = verify(out, fmap, input_text)
+            acct.log_call(conn, product_id=row["id"], model=model_name, phase=phase, attempt=attempt,
+                          input_tokens=usage.get("input_tokens", 0),
+                          output_tokens=usage.get("output_tokens", 0), latency_ms=latency,
+                          status="enriched" if not fails else "verifier_failed",
+                          fail_reason=(fails[0] if fails else None), prompt_version=PROMPT_VERSION)
+            if not fails:
                 ok = True
                 break
         ts = now_iso()
@@ -257,8 +281,8 @@ def run(conn: sqlite3.Connection, *, client, client_strong=None, model_name: str
             conn.execute("UPDATE products SET llm_hash=?, llm_status='enrich_failed', "
                          "llm_enriched_at=? WHERE id=?", (h, ts, row["id"]))
             stats["failed"] += 1
-    conn.commit()
-    stats["spend_inr"] = round(stats["spend_inr"], 3)
+        conn.commit()                                  # durable ledger + status per product
+    stats["spend_inr"] = acct.spend_since(conn, 1)
     return stats
 
 
@@ -283,7 +307,10 @@ def gemini_client(model: str = "gemini-2.5-flash"):
             # surface quota/safety errors clearly instead of a bare KeyError
             raise RuntimeError(f"gemini {r.status_code}: "
                                f"{(body.get('error') or {}).get('status', body)}")
-        return json.loads(body["candidates"][0]["content"]["parts"][0]["text"])
+        um = body.get("usageMetadata") or {}
+        return {"output": json.loads(body["candidates"][0]["content"]["parts"][0]["text"]),
+                "usage": {"input_tokens": um.get("promptTokenCount", 0),
+                          "output_tokens": um.get("candidatesTokenCount", 0)}}
 
     return _call
 

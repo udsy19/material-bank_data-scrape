@@ -19,7 +19,7 @@ from urllib.parse import urlparse
 
 from .models import NormalizedProduct, PriceObservation, Supplier
 
-SCHEMA_VERSION = 17
+SCHEMA_VERSION = 18
 
 _REPO_ROOT = Path(__file__).resolve().parent.parent
 DEFAULT_DB_PATH = _REPO_ROOT / "data" / "catalog.db"
@@ -420,6 +420,31 @@ _MIGRATIONS = (
         ALTER TABLE products ADD COLUMN llm_enriched_at TEXT;
         """,
      "LLM enrichment: llm_content (bonus) + novelty hash + status"),
+    # LLM call ledger — full-fidelity accounting: one row per API call (incl.
+    # retries/escalations and failures), with actual token counts and ₹ cost
+    # derived from them. This is the source of truth for spend + the budget
+    # circuit-breaker, and powers the LLM-ops cockpit. Never estimated.
+    (18, """
+        CREATE TABLE IF NOT EXISTS llm_calls (
+            id            INTEGER PRIMARY KEY AUTOINCREMENT,
+            occurred_at   TEXT NOT NULL,
+            product_id    INTEGER,
+            model         TEXT,
+            prompt_version TEXT,
+            phase         TEXT,          -- realtime | batch | eval
+            attempt       INTEGER,       -- 0 primary, 1 retry, 2 escalation
+            input_tokens  INTEGER,
+            output_tokens INTEGER,
+            cost_inr      REAL,
+            latency_ms    INTEGER,
+            status        TEXT,          -- enriched | verifier_failed | api_error
+            fail_reason   TEXT,
+            batch_job     TEXT
+        );
+        CREATE INDEX IF NOT EXISTS idx_llm_calls_time ON llm_calls(occurred_at);
+        CREATE INDEX IF NOT EXISTS idx_llm_calls_status ON llm_calls(status);
+        """,
+     "llm_calls ledger: per-call tokens + ₹ cost + status (observability)"),
 )
 
 

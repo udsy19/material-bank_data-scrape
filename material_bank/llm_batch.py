@@ -78,8 +78,10 @@ def collect_batch(conn: sqlite3.Connection, job_name: str, *, transport,
     """Ingest a finished batch: verify each result, write llm_content (pass) or
     mark enrich_failed (reject). Re-serialises each product to verify against its
     own field map — the verifier is the same one the realtime path uses."""
-    results = transport.results(job_name)          # [{key, text}|{key, error}]
-    stats = {"results": len(results), "enriched": 0, "failed": 0, "missing": 0}
+    from . import llm_accounting as acct
+
+    results = transport.results(job_name)          # [{key, text, usage}|{key, error}]
+    stats = {"results": len(results), "enriched": 0, "failed": 0, "missing": 0, "spend_inr": 0.0}
     ts = now_iso()
     for res in results:
         pid = res.get("key")
@@ -91,13 +93,26 @@ def collect_batch(conn: sqlite3.Connection, job_name: str, *, transport,
             continue
         input_text, fmap, image_url = serialise(row)
         h = novelty_hash(input_text, image_url)
+        usage = res.get("usage") or {}
         out = None
         if res.get("text"):
             try:
                 out = json.loads(res["text"])
             except (ValueError, TypeError):
                 out = None
-        if out is not None and not verify(out, fmap, input_text):
+        if out is None:
+            status, reason = "api_error", str(res.get("error") or "no/invalid response text")
+        else:
+            fails = verify(out, fmap, input_text)
+            status = "enriched" if not fails else "verifier_failed"
+            reason = fails[0] if fails else None
+        # ledger row per batch result (batch billed at 50%)
+        stats["spend_inr"] += acct.log_call(
+            conn, product_id=pid, model=model_name, phase="batch", attempt=0,
+            input_tokens=usage.get("input_tokens", 0), output_tokens=usage.get("output_tokens", 0),
+            status=status, fail_reason=reason, batch=True, prompt_version=PROMPT_VERSION,
+            batch_job=job_name)
+        if status == "enriched":
             content = {**out, "_meta": {"basis": f"generated:llm:{model_name}:prompt_{PROMPT_VERSION}",
                                         "at": ts}}
             conn.execute("UPDATE products SET llm_content=?, llm_hash=?, llm_status='enriched', "
@@ -108,6 +123,7 @@ def collect_batch(conn: sqlite3.Connection, job_name: str, *, transport,
                          "llm_enriched_at=? WHERE id=?", (h, ts, pid))
             stats["failed"] += 1
     conn.commit()
+    stats["spend_inr"] = round(stats["spend_inr"], 4)
     return stats
 
 
@@ -152,8 +168,12 @@ class GeminiBatchTransport:
         for item in inlined:
             key = (item.get("metadata") or {}).get("key")
             try:
-                txt = item["response"]["candidates"][0]["content"]["parts"][0]["text"]
-                out.append({"key": key, "text": txt})
+                resp = item["response"]
+                txt = resp["candidates"][0]["content"]["parts"][0]["text"]
+                um = resp.get("usageMetadata") or {}
+                out.append({"key": key, "text": txt,
+                            "usage": {"input_tokens": um.get("promptTokenCount", 0),
+                                      "output_tokens": um.get("candidatesTokenCount", 0)}})
             except (KeyError, IndexError, TypeError):
                 out.append({"key": key, "error": item.get("error") or "no candidates"})
         return out
