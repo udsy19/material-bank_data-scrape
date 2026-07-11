@@ -15,10 +15,14 @@ import re
 
 from .db import normalize_domain
 
-# hosts that appear on profile pages but are never the brand's own site
-_NOISE = ("indiadesignid.com", "gmpg.org", "bookmyshow.com", "google.", "gstatic.",
-          "w3.org", "schema.org", "jquery", "wordpress.org", "wp.com", "gravatar.com",
-          "fonts.", "cdn.", "youtu", "vimeo.com", "maps.")
+# hosts that appear on profile pages but are never the brand's own site:
+# the directory itself, ticketing, analytics/trackers, CDNs, fonts, boilerplate.
+_NOISE = ("indiadesignid.com", "gmpg.org", "bookmyshow.com", "gstatic.", "w3.org",
+          "schema.org", "jquery", "wordpress.org", "wp.com", "gravatar.com", "fonts.",
+          "cdn.", "youtu", "vimeo.com", "maps.", "googletagmanager", "google-analytics",
+          "googleapis", "googleadservices", "googlesyndication", "doubleclick",
+          "google.com", "cloudflare", "jsdelivr", "unpkg", "cdnjs", "bit.ly",
+          "amazon.com", "amzn", "linktr.ee", "calendly", "typekit", "adobe.com")
 _SOCIAL = ("instagram.com", "facebook.com", "twitter.com", "x.com", "linkedin.com",
            "pinterest.", "wa.me", "whatsapp", "t.me", "threads.net", "behance.net")
 _HREF_RE = re.compile(r'href="(https?://[^"]+)"', re.I)

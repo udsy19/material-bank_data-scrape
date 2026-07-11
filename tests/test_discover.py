@@ -26,3 +26,10 @@ def test_resolve_prefers_brand_name_token_match():
 def test_resolve_none_when_only_noise():
     html = '<a href="https://instagram.com/x">i</a><a href="https://indiadesignid.com/y">p</a>'
     assert resolve_site(html, "Brand") is None
+
+
+def test_resolve_skips_trackers_and_cdns():
+    html = ('<a href="https://www.googletagmanager.com/gtm.js">gtm</a>'
+            '<a href="https://cdn.jsdelivr.net/x">cdn</a>'
+            '<a href="https://abaca.in/">Abaca</a>')
+    assert resolve_site(html, "ABACA") == "abaca.in"
