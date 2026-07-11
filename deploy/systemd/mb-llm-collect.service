@@ -1,5 +1,5 @@
 [Unit]
-Description=Material Bank — collect + ingest finished LLM batch jobs
+Description=Material Bank — LLM batch flywheel tick (collect finished + submit until quota)
 After=network-online.target
 Wants=network-online.target
 
@@ -8,7 +8,7 @@ Type=oneshot
 User=__APP_USER__
 WorkingDirectory=__APP_DIR__
 EnvironmentFile=-__APP_DIR__/.env
-ExecStart=/opt/material-bank/.venv/bin/python -m material_bank.llm_batch --collect --model gemini-flash-latest
+ExecStart=/opt/material-bank/.venv/bin/python -m material_bank.llm_batch --advance --chunk 1000 --workers 24 --model gemini-flash-latest
 TimeoutStartSec=30m
 StandardOutput=append:__APP_DIR__/reports/mb-llm-collect.log
 StandardError=append:__APP_DIR__/reports/mb-llm-collect.log

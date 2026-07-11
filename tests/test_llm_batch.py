@@ -89,6 +89,34 @@ def test_submit_records_job_and_submit_all_chunks(conn):
     assert conn.execute("SELECT COUNT(*) FROM llm_batch_jobs").fetchone()[0] >= 2
 
 
+def test_advance_stops_cleanly_on_quota_429(conn):
+    """A 429 mid-tick must end submission without crashing or marking rows — those
+    products stay eligible for the next tick."""
+    class QuotaT:
+        def __init__(self): self._n = 0
+        def submit(self, reqs):
+            self._n += 1
+            if self._n > 1:
+                raise RuntimeError("batch submit 429: RESOURCE_EXHAUSTED")
+            return "operations/j1"
+        def results(self, job): raise RuntimeError("not done yet")   # nothing to collect
+    out = lb.advance(conn, transport=QuotaT(), chunk=1, prepare=lambda u: None)
+    assert out["jobs_submitted"] == 1                    # one landed, then quota stopped it
+    assert out["remaining_unbatched"] >= 1               # the rest untouched, still eligible
+    assert conn.execute("SELECT COUNT(*) FROM llm_batch_jobs").fetchone()[0] == 1
+
+
+def test_advance_drains_until_exhausted(conn):
+    """With no quota limit, advance keeps submitting until the catalog is empty."""
+    class OpenT:
+        def __init__(self): self._n = 0
+        def submit(self, reqs): self._n += 1; return f"operations/j{self._n}"
+        def results(self, job): raise RuntimeError("not done yet")
+    out = lb.advance(conn, transport=OpenT(), chunk=1, prepare=lambda u: None)
+    assert out["remaining_unbatched"] == 0
+    assert out["jobs_submitted"] == 2                    # two products, chunk=1
+
+
 def test_collect_pending_ingests_finished_jobs(conn):
     ids = [r[0] for r in conn.execute("SELECT id FROM products ORDER BY id")]
 

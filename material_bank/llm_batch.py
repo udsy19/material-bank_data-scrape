@@ -111,6 +111,40 @@ def submit_all(conn: sqlite3.Connection, *, transport, chunk: int = 5000,
     return {"jobs": len(jobs), "products": total, "job_names": jobs}
 
 
+def advance(conn: sqlite3.Connection, *, transport, chunk: int = 1000,
+            prepare=_prep_image, model_name: str = "gemini-flash-latest",
+            workers: int = 24, max_submit_per_tick: int = 60) -> dict:
+    """One autonomous tick of the batch flywheel, self-pacing against Gemini's
+    batch *enqueued-token* quota:
+
+      1. collect finished jobs (writes results AND frees enqueued quota), then
+      2. submit fresh chunks until the catalog is exhausted OR the quota pushes
+         back with a 429 — which just ends this tick; the next one retries after
+         more jobs have drained.
+
+    ``submit_batch`` calls the wire ``submit()`` before it records/marks anything,
+    so a 429'd chunk leaves state untouched and its rows stay eligible. Safe to
+    run on a short timer until the whole catalog is enriched — no live process to
+    babysit, fully resumable."""
+    ingest = collect_pending(conn, transport=transport, model_name=model_name)
+    submitted = 0
+    for _ in range(max_submit_per_tick):
+        try:
+            out = submit_batch(conn, transport=transport, limit=chunk, prepare=prepare,
+                               model_name=model_name, workers=workers)
+        except RuntimeError as e:
+            if "429" in str(e) or "RESOURCE_EXHAUSTED" in str(e):
+                break                       # quota full; next tick retries post-drain
+            raise
+        if not out["count"]:
+            break                           # catalog exhausted
+        submitted += 1
+    remaining = conn.execute(
+        "SELECT COUNT(*) FROM products WHERE (llm_status IS NULL OR llm_status='stale' "
+        "OR llm_hash NOT LIKE ?) AND title IS NOT NULL", (f"{PROMPT_VERSION}:%",)).fetchone()[0]
+    return {**ingest, "jobs_submitted": submitted, "remaining_unbatched": remaining}
+
+
 def collect_pending(conn: sqlite3.Connection, *, transport,
                     model_name: str = "gemini-flash-latest") -> dict:
     """Poll every still-submitted job; ingest the finished ones (verify + write +
@@ -255,6 +289,8 @@ def main(argv=None) -> int:
     ap.add_argument("--submit-all", action="store_true", help="submit the whole catalog in chunks")
     ap.add_argument("--submit", action="store_true", help="submit one chunk")
     ap.add_argument("--collect", action="store_true", help="poll + ingest all finished jobs")
+    ap.add_argument("--advance", action="store_true",
+                    help="one self-pacing tick: collect finished + submit until quota/exhausted (the timer entrypoint)")
     ap.add_argument("--chunk", type=int, default=5000)
     ap.add_argument("--workers", type=int, default=24, help="parallel image-prep threads")
     ap.add_argument("--max", type=int, default=None, help="cap products for --submit-all")
@@ -269,6 +305,9 @@ def main(argv=None) -> int:
                          model_name=args.model, workers=args.workers)
     elif args.submit:
         out = submit_batch(conn, transport=transport, limit=args.chunk, model_name=args.model)
+    elif args.advance:
+        out = advance(conn, transport=transport, chunk=args.chunk, model_name=args.model,
+                      workers=args.workers)
     elif args.collect:
         out = collect_pending(conn, transport=transport, model_name=args.model)
     else:
