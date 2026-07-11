@@ -1,0 +1,162 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>LLM Ops — DSource Material Bank</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,400;9..144,500&family=Inter:wght@400;500;600&display=swap" rel="stylesheet">
+<style>
+  :root{
+    --parchment:#fefffc; --paper:#fff; --linen:#f9faf7; --graphite:#2c2c2c; --charcoal:#444141;
+    --ash:#646464; --fog:#b4b8b4; --mist:#dee2de; --dusk:#1f1f29; --cerulean:#0081c0; --signal:#41a1cf;
+    --serif:"Fraunces",Georgia,serif; --sans:"Inter",ui-sans-serif,system-ui,sans-serif;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--parchment);color:var(--charcoal);font-family:var(--sans);
+    font-size:16px;line-height:1.5;letter-spacing:-0.01em}
+  .serif{font-family:var(--serif);font-weight:400}
+  a{color:inherit}
+  header{position:relative;overflow:hidden;margin:12px;padding:28px 24px;background:var(--dusk);border-radius:20px}
+  header::before{content:"";position:absolute;inset:0;pointer-events:none;
+    background:radial-gradient(50% 60% at 20% -10%,rgba(0,129,192,.28),transparent 70%)}
+  .bar{position:relative;display:flex;align-items:center;justify-content:space-between;gap:16px;flex-wrap:wrap}
+  .brand{display:flex;align-items:center;gap:12px;color:var(--parchment);font-weight:500}
+  .brand a{color:var(--mist);text-decoration:none;font-size:14px}
+  .brand a:hover{color:var(--parchment)}
+  header h1{position:relative;margin:20px 0 4px;font-family:var(--serif);font-weight:400;
+    font-size:clamp(28px,4vw,40px);line-height:1.1;letter-spacing:-0.02em;color:var(--parchment)}
+  header .rate{position:relative;font-size:13px;color:var(--fog);max-width:720px}
+  /* currency toggle */
+  .toggle{display:inline-flex;border:1px solid rgba(255,255,255,.25);border-radius:8px;overflow:hidden}
+  .toggle button{padding:7px 14px;cursor:pointer;font-family:var(--sans);font-size:14px;font-weight:500;
+    color:var(--mist);background:transparent;border:none}
+  .toggle button.on{background:var(--cerulean);color:#fff}
+  main{max-width:1200px;margin:0 auto;padding:8px 24px 80px}
+  .refresh{margin-left:12px;padding:6px 12px;cursor:pointer;font-size:13px;font-weight:500;color:var(--cerulean);
+    background:transparent;border:1px solid var(--mist);border-radius:8px}
+  .cards{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:16px 0;margin:28px 0 0;
+    padding:24px 0;border-top:1px solid var(--mist);border-bottom:1px solid var(--mist)}
+  .card{padding:0 20px;border-left:1px solid var(--mist)}
+  .card:first-child{border-left:none;padding-left:0}
+  .card .n{font-size:27px;line-height:1.2;letter-spacing:-0.04em;color:var(--graphite)}
+  .card .l{margin-top:2px;font-size:13px;color:var(--ash)}
+  h2{margin:40px 0 0;font-family:var(--serif);font-weight:400;font-size:22px;letter-spacing:-0.03em;color:var(--graphite)}
+  .models{margin-top:12px;display:flex;flex-wrap:wrap;gap:8px}
+  .mpill{padding:6px 12px;font-size:13px;color:var(--charcoal);background:var(--paper);
+    border:1px solid var(--mist);border-radius:8px}
+  .mpill b{color:var(--graphite)}
+  .wrap{overflow-x:auto;margin-top:12px}
+  table{width:100%;border-collapse:collapse;font-size:13px;letter-spacing:-0.13px}
+  th{text-align:left;font-weight:500;color:var(--ash);padding:8px 10px;border-bottom:1px solid var(--mist);white-space:nowrap}
+  td{padding:8px 10px;border-bottom:1px solid var(--linen);white-space:nowrap}
+  td.num{text-align:right;font-variant-numeric:tabular-nums}
+  td.t{white-space:normal;color:var(--charcoal)}
+  .st{padding:2px 8px;border-radius:6px;font-size:12px;font-weight:500}
+  .st.enriched{background:rgba(0,129,192,.12);color:var(--cerulean)}
+  .st.verifier_failed{background:rgba(160,60,43,.12);color:#a0342b}
+  .st.api_error{background:rgba(100,100,100,.14);color:var(--ash)}
+  .more{display:block;margin:24px auto 0;padding:9px 22px;cursor:pointer;font-size:14px;font-weight:500;
+    color:var(--cerulean);background:transparent;border:1px solid var(--mist);border-radius:8px}
+  .empty{margin-top:28px;color:var(--ash)}
+</style>
+</head>
+<body>
+<header>
+  <div class="bar">
+    <div class="brand">
+      <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.2" style="color:#fefffc">
+        <circle cx="8" cy="6" r="2.6"/><path d="M1 13c2.4-2.8 4.9-4.2 7-4.2S13.6 10.2 15 13"/></svg>
+      DSource Material Bank &nbsp; <a href="/">← Catalog</a>
+    </div>
+    <div class="toggle" id="cur">
+      <button data-cur="INR" class="on">₹ INR</button>
+      <button data-cur="USD">$ USD</button>
+    </div>
+  </div>
+  <h1>LLM enrichment — spend &amp; every call</h1>
+  <div class="rate" id="rate">loading…</div>
+</header>
+
+<main>
+  <section class="cards" id="cards"></section>
+  <h2>By model</h2>
+  <div class="models" id="models"></div>
+  <h2>Call ledger <button class="refresh" id="refresh">refresh</button></h2>
+  <div class="wrap"><table id="calls"></table></div>
+  <div class="empty" id="empty" style="display:none;">No calls yet — the ledger fills the moment enrichment runs.</div>
+  <button class="more" id="more" style="display:none;">Show more calls</button>
+</main>
+
+<script>
+const $ = s => document.querySelector(s);
+const esc = s => { const d = document.createElement("div"); d.textContent = s == null ? "" : s; return d.innerHTML; };
+const state = { cur: "INR", usd_inr: 83, report: null, items: [], offset: 0, total: 0 };
+
+function money(inr) {
+  const v = Number(inr || 0);
+  return state.cur === "USD"
+    ? "$" + (v / state.usd_inr).toLocaleString("en-US", {maximumFractionDigits: 4})
+    : "₹" + v.toLocaleString("en-IN", {maximumFractionDigits: 2});
+}
+
+function renderCockpit() {
+  const r = state.report; if (!r) return;
+  const at = r.all_time || {};
+  const pr = r.verifier_pass_rate;
+  const cards = [
+    ["spent today", money(r.spend_today_inr)],
+    ["spent 30 days", money(r.spend_window_inr)],
+    ["all-time", money(at.cost_inr)],
+    ["total calls", (at.calls || 0).toLocaleString()],
+    ["verifier pass-rate", pr == null ? "—" : Math.round(pr * 100) + "%"],
+    ["tokens in / out", `${((at.input_tokens || 0) / 1e3).toFixed(0)}k / ${((at.output_tokens || 0) / 1e3).toFixed(0)}k`],
+  ];
+  $("#cards").innerHTML = cards.map(([l, n]) => `<div class="card"><div class="n serif">${n}</div><div class="l">${l}</div></div>`).join("");
+  const gf = ((r.rates || {}).pricing_usd_per_1m || {})["gemini-2.5-flash"] || [];
+  $("#rate").textContent = `rate: $${gf[0]}/$${gf[1]} per 1M input/output tokens · ₹${(r.rates||{}).usd_inr}/$ · batch −50% · every amount is derived from actual token counts, nothing estimated`;
+  $("#models").innerHTML = (r.by_model || []).map(m =>
+    `<span class="mpill">${esc(m.model)} <b>${m.calls} calls</b> · ${money(m.cost_inr)}</span>`).join("")
+    || `<span class="mpill">no calls yet</span>`;
+}
+
+function renderCalls() {
+  $("#empty").style.display = state.items.length ? "none" : "block";
+  const head = `<tr><th>#</th><th>time (UTC)</th><th>product</th><th>model</th><th>phase</th>
+    <th>att</th><th>in</th><th>out</th><th>cost</th><th>ms</th><th>status</th><th>reason</th></tr>`;
+  $("#calls").innerHTML = head + state.items.map(c => `<tr>
+    <td class="num">${c.id}</td><td>${(c.occurred_at || "").slice(0,10)} ${(c.occurred_at || "").slice(11,19)}</td>
+    <td class="t">${esc((c.title || "—").slice(0,44))}</td><td>${esc(c.model || "")}</td>
+    <td>${esc(c.phase || "")}</td><td class="num">${c.attempt}</td>
+    <td class="num">${c.input_tokens}</td><td class="num">${c.output_tokens}</td>
+    <td class="num">${money(c.cost_inr)}</td><td class="num">${c.latency_ms}</td>
+    <td><span class="st ${esc(c.status)}">${esc(c.status)}</span></td>
+    <td class="t">${esc(c.fail_reason || "")}</td></tr>`).join("");
+  $("#more").style.display = state.offset < state.total ? "block" : "none";
+}
+
+async function loadReport() {
+  state.report = await (await fetch("/api/llm")).json();
+  state.usd_inr = (state.report.rates || {}).usd_inr || 83;
+  renderCockpit();
+}
+async function loadCalls(reset) {
+  if (reset) { state.offset = 0; state.items = []; }
+  const d = await (await fetch(`/api/llm/calls?limit=40&offset=${state.offset}`)).json();
+  state.total = d.total; state.items = state.items.concat(d.items || []); state.offset += (d.items || []).length;
+  renderCalls();
+}
+async function refresh() { await loadReport(); await loadCalls(true); }
+
+document.querySelectorAll("#cur button").forEach(b => b.onclick = () => {
+  state.cur = b.dataset.cur;
+  document.querySelectorAll("#cur button").forEach(x => x.classList.toggle("on", x === b));
+  renderCockpit(); renderCalls();               // instant reconvert, no refetch
+});
+$("#more").onclick = () => loadCalls(false);
+$("#refresh").onclick = refresh;
+refresh();
+</script>
+</body>
+</html>

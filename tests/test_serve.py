@@ -157,6 +157,13 @@ def test_quality_endpoint_shape(client):
     assert q["products"] == 3
 
 
+def test_llm_ops_page_served(client):
+    r = client.get("/llm")
+    assert r.status_code == 200
+    assert "LLM enrichment" in r.text and "/api/llm/calls" in r.text
+    assert 'data-cur="USD"' in r.text and 'data-cur="INR"' in r.text   # the toggle
+
+
 def test_llm_ops_endpoints(client):
     from material_bank import llm_accounting as acct
     # empty ledger reads honest zeros

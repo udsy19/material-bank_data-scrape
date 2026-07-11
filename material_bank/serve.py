@@ -45,6 +45,11 @@ def create_app(state_provider) -> FastAPI:
     def dashboard() -> str:
         return (_STATIC / "dashboard.html").read_text(encoding="utf-8")
 
+    @app.get("/llm", response_class=HTMLResponse)
+    def llm_ops() -> str:
+        """Standalone LLM-ops page: spend cockpit + call ledger, USD/INR toggle."""
+        return (_STATIC / "llm.html").read_text(encoding="utf-8")
+
     @app.get("/healthz")
     def healthz() -> dict:
         return {"ok": True}
