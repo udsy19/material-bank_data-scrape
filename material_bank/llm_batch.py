@@ -30,6 +30,7 @@ from .llm_enrich import (
     PROMPT_VERSION,
     _INPUT_FIELDS,
     build_prompt,
+    extract_json,
     novelty_hash,
     sanitize,
     serialise,
@@ -195,7 +196,7 @@ def collect_batch(conn: sqlite3.Connection, job_name: str, *, transport,
         out = None
         if res.get("text"):
             try:
-                out = json.loads(res["text"])
+                out = extract_json(res["text"])            # same robust parser as the realtime path
             except (ValueError, TypeError):
                 out = None
         if out is None:

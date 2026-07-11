@@ -72,6 +72,16 @@ def test_collect_verifies_and_writes(conn):
     assert conn.execute("SELECT llm_status FROM products WHERE id=?", (ids[1],)).fetchone()[0] == "enrich_failed"
 
 
+def test_collect_recovers_fenced_json(conn):
+    """A batch result wrapped in ```json fences (or trailing prose) must be
+    recovered by extract_json, not marked api_error and thrown away."""
+    ids = [r[0] for r in conn.execute("SELECT id FROM products ORDER BY id")]
+    fenced = "```json\n" + _good_json() + "\n```  (done)"
+    out = lb.collect_batch(conn, "j", transport=FakeTransport([{"key": str(ids[0]), "text": fenced}]))
+    assert out["enriched"] == 1
+    assert conn.execute("SELECT llm_status FROM products WHERE id=?", (ids[0],)).fetchone()[0] == "enriched"
+
+
 def test_collect_handles_error_result(conn):
     ids = [r[0] for r in conn.execute("SELECT id FROM products ORDER BY id")]
     out = lb.collect_batch(conn, "j", transport=FakeTransport([{"key": str(ids[0]), "error": "quota"}]))
