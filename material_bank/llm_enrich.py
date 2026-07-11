@@ -380,26 +380,29 @@ def gemini_client(model: str = "gemini-flash-latest"):
     import os
 
     def _call(prompt: str, image_url: str | None) -> dict:
+        import time
+
         from curl_cffi import requests
         key = os.environ["GEMINI_API_KEY"]
-        parts = [{"text": prompt}]
-        # (image bytes would be attached here for the vision path; omitted in v1
-        #  realtime client — the batch pipeline attaches inline_data)
-        r = requests.post(
-            f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent",
-            headers={"x-goog-api-key": key, "Content-Type": "application/json"},
-            json={"contents": [{"parts": parts}],
-                  "generationConfig": {"responseMimeType": "application/json"}},
-            timeout=60)
-        body = r.json()
-        if r.status_code != 200 or "candidates" not in body:
-            # surface quota/safety errors clearly instead of a bare KeyError
-            raise RuntimeError(f"gemini {r.status_code}: "
-                               f"{(body.get('error') or {}).get('status', body)}")
-        um = body.get("usageMetadata") or {}
-        return {"output": json.loads(body["candidates"][0]["content"]["parts"][0]["text"]),
-                "usage": {"input_tokens": um.get("promptTokenCount", 0),
-                          "output_tokens": um.get("candidatesTokenCount", 0)}}
+        url = f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent"
+        payload = {"contents": [{"parts": [{"text": prompt}]}],
+                   "generationConfig": {"responseMimeType": "application/json"}}
+        last = ""
+        for i in range(4):                             # backoff-retry transient errors
+            r = requests.post(url, headers={"x-goog-api-key": key, "Content-Type": "application/json"},
+                              json=payload, timeout=60)
+            body = r.json()
+            if r.status_code == 200 and "candidates" in body:
+                um = body.get("usageMetadata") or {}
+                return {"output": json.loads(body["candidates"][0]["content"]["parts"][0]["text"]),
+                        "usage": {"input_tokens": um.get("promptTokenCount", 0),
+                                  "output_tokens": um.get("candidatesTokenCount", 0)}}
+            last = f"gemini {r.status_code}: {(body.get('error') or {}).get('status', '')}"
+            if r.status_code in (429, 500, 503) and i < 3:
+                time.sleep(1.5 * (2 ** i))             # 1.5s, 3s, 6s
+                continue
+            raise RuntimeError(last)                    # non-transient -> fail now
+        raise RuntimeError(last or "gemini retries exhausted")
 
     return _call
 
