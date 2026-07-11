@@ -36,22 +36,21 @@ _PLUMBING_WORDS = {
     "standard", "identified", "specified", "titled", "manufactured", "belongs",
     "falls", "under", "named", "called", "listed", "record",
 }
-# tag sources that are too generic to justify a facet (a tag must trace to a
-# DISTINGUISHING attribute or the image, not just name/brand/category)
-_GENERIC_FIELDS = {"title", "brand", "category_std", "category", "supplier_domain"}
 _ID_IN_PROSE_RE = re.compile(r"\b(?:f\d+|img1)\b", re.I)
 _MAX_TAGS = 3
 
-STYLE_VOCAB = {
-    "modern", "contemporary", "traditional", "rustic", "industrial", "minimalist",
-    "scandinavian", "bohemian", "coastal", "mid-century", "art-deco", "transitional",
-    "classic", "luxury",
-}
-USE_CASE_VOCAB = {
-    "living-room", "bedroom", "bathroom", "kitchen", "outdoor", "commercial",
-    "residential", "high-traffic", "wet-area", "flooring", "wall", "facade",
-    "backsplash", "countertop", "office", "hospitality",
-}
+# Evidence-based tagging (data, not code): each vocab tag carries the keywords
+# that justify it. use_case tags are DERIVED deterministically from the record's
+# text (grounded by construction, never an LLM guess); style tags come from the
+# LLM but are kept only with textual evidence or image support. Editing the
+# taxonomy is a JSON edit, not a deploy.
+import pathlib as _pathlib  # noqa: E402
+
+_TAG_VOCAB = json.loads((_pathlib.Path(__file__).parent / "tag_vocab.json").read_text())
+_UC_EVID: dict = _TAG_VOCAB["use_case"]
+_STYLE_EVID: dict = _TAG_VOCAB["style"]
+STYLE_VOCAB = set(_STYLE_EVID)
+USE_CASE_VOCAB = set(_UC_EVID)
 MATERIAL_VOCAB = {
     "marble", "granite", "wood", "stone", "concrete", "terrazzo", "metal",
     "ceramic", "porcelain", "glass", "fabric", "leather", "laminate", "quartz",
@@ -175,29 +174,38 @@ def _sentences_ok(items, fmap, input_text, supplier_domain):
     return fails
 
 
-def _tag_ok(it, vocab, valid_ids, field_map) -> bool:
-    """A tag is kept iff it is in-vocab, cites valid ids, and is grounded in a
-    DISTINGUISHING source (the image or a non-generic field — not name/brand/cat)."""
-    if not isinstance(it, dict) or it.get("tag") not in vocab:
-        return False
-    srcs = it.get("sources") or []
-    if not srcs or any(s not in valid_ids for s in srcs):
-        return False
-    return "img1" in srcs or any(field_map.get(s, ("", ""))[0] not in _GENERIC_FIELDS
-                                 for s in srcs if s in field_map)
+def _has_evidence(keywords, text: str) -> bool:
+    return any(k in text for k in keywords)
 
 
-def sanitize(output: dict, field_map: dict) -> dict:
-    """Drop what a strict verifier would reject but that shouldn't waste a whole
-    retry: ungrounded / out-of-vocab / excess tags, and out-of-vocab vision. An
-    ungrounded 'residential' tag is dropped, not a reason to re-bill a good
-    description. The description itself is NEVER touched here — it's hard-verified."""
+def derive_use_case_tags(text: str) -> list[str]:
+    """Deterministic, evidence-grounded use-case tags from the record's own text
+    (title/category/finish/colour). Grounded by construction — never a guess."""
+    t = " " + (text or "").lower() + " "
+    return [tag for tag, kws in _UC_EVID.items() if _has_evidence(kws, t)][:_MAX_TAGS]
+
+
+def sanitize(output: dict, field_map: dict, input_text: str = "") -> dict:
+    """Make the tags robust WITHOUT ever triggering a retry:
+      - use_case_tags: replaced with deterministic, evidence-derived tags.
+      - style_tags: keep the LLM's only with textual evidence OR image support.
+      - vision.material_look: null an out-of-vocab value.
+    The description is never touched here — it's hard-verified by ``verify``."""
     if not isinstance(output, dict):
         return output
-    valid_ids = set(field_map) | {"img1"}
     o = dict(output)
-    for key, vocab in (("style_tags", STYLE_VOCAB), ("use_case_tags", USE_CASE_VOCAB)):
-        o[key] = [it for it in (o.get(key) or []) if _tag_ok(it, vocab, valid_ids, field_map)][:_MAX_TAGS]
+    t = " " + (input_text or "").lower() + " "
+    o["use_case_tags"] = [{"tag": tag, "sources": ["derived"]}
+                          for tag in derive_use_case_tags(input_text)]
+    style = []
+    for it in (o.get("style_tags") or []):
+        if not isinstance(it, dict) or it.get("tag") not in STYLE_VOCAB:
+            continue
+        tag, srcs = it["tag"], (it.get("sources") or [])
+        ev = _has_evidence(_STYLE_EVID.get(tag, []), t)
+        if ev or "img1" in srcs:
+            style.append({"tag": tag, "sources": ["evidence"] if ev else ["img1"]})
+    o["style_tags"] = style[:_MAX_TAGS]
     v = dict(o.get("vision") or {})
     ml = (v.get("material_look") or {}).get("value")
     if ml and ml != "unknown" and ml not in MATERIAL_VOCAB:
@@ -322,7 +330,7 @@ def _attempt_calls(client, input_text, image_url, fmap, model_name, phase, *, ma
             continue
         latency = int((time.monotonic() - t0) * 1000)
         o, usage = _unpack(res)
-        o = sanitize(o, fmap)                          # drop bad tags (no retry for those)
+        o = sanitize(o, fmap, input_text)              # deterministic use-case tags + evidence style
         fails = verify(o, fmap, input_text)            # hard checks only -> retry
         logs.append({"model": model_name, "phase": phase, "attempt": attempt,
                      "input_tokens": usage.get("input_tokens", 0),

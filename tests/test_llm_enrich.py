@@ -81,7 +81,7 @@ def test_visual_colour_and_shape_claims_are_allowed_img_only():
 
 def test_out_of_vocab_tag_is_dropped_not_failed():
     o = _good(); o["style_tags"] = [{"tag": "steampunk", "sources": ["img1"]}]
-    s = le.sanitize(o, FMAP)
+    s = le.sanitize(o, FMAP, INPUT)
     assert s["style_tags"] == [] and le.verify(s, FMAP, INPUT) == []   # dropped, no retry
 
 
@@ -102,31 +102,41 @@ def test_plumbing_in_prose_rejected():
         assert any("plumbing" in f or "citation id" in f for f in fails), bad
 
 
-def test_sanitize_caps_and_drops_bad_tags_without_failing_verify():
-    # 4 use-case tags (>3) + an ungrounded one + an out-of-vocab one — all handled
-    # by sanitize (dropped), NOT by a full retry.
+def test_use_case_tags_are_derived_from_evidence_not_the_llm():
+    # a functional keyword in the record -> derived tag; the LLM's guess is ignored
+    inp = "f1 [title]: Anti Static Conductive Tile\nf2 [category_std]: Tiles\nf3 [finish]: Matte"
     o = _good()
-    o["use_case_tags"] = ([{"tag": t, "sources": ["img1"]} for t in
-                           ("residential", "commercial", "hospitality", "office")]
-                          + [{"tag": "flooring", "sources": ["f2"]}])   # f2=category_std (generic)
-    o["style_tags"] = [{"tag": "steampunk", "sources": ["img1"]}]        # out-of-vocab
-    s = le.sanitize(o, FMAP)
-    assert len(s["use_case_tags"]) <= 3                                   # capped
-    assert all(t["sources"] != ["f2"] for t in s["use_case_tags"])       # ungrounded dropped
-    assert s["style_tags"] == []                                         # out-of-vocab dropped
-    assert le.verify(s, FMAP, INPUT) == []                               # description still passes -> no retry
+    o["use_case_tags"] = [{"tag": "residential", "sources": ["img1"]}]    # LLM guess -> ignored
+    s = le.sanitize(o, FMAP, inp)
+    uc = [t["tag"] for t in s["use_case_tags"]]
+    assert ("commercial" in uc or "high-traffic" in uc)                  # from 'anti static conductive'
+    assert "residential" not in uc                                       # not derived (no evidence)
+    assert all(t["sources"] == ["derived"] for t in s["use_case_tags"])
+
+
+def test_style_tags_kept_only_with_evidence_or_image():
+    o = _good()
+    o["style_tags"] = [{"tag": "modern", "sources": ["img1"]},           # image-supported -> kept
+                       {"tag": "rustic", "sources": ["f1"]}]             # no evidence, no img -> dropped
+    s = le.sanitize(o, FMAP, INPUT)
+    tags = [t["tag"] for t in s["style_tags"]]
+    assert "modern" in tags and "rustic" not in tags
+    # textual evidence keeps a style tag even without the image
+    s2 = le.sanitize({**_good(), "style_tags": [{"tag": "rustic", "sources": ["f1"]}]},
+                     FMAP, INPUT + "\nf4 [title2]: distressed rustic finish")
+    assert [t["tag"] for t in s2["style_tags"]] == ["rustic"]
 
 
 def test_sanitize_nulls_out_of_vocab_vision():
     o = _good(); o["vision"] = {"material_look": {"value": "Marble Look", "confidence": 0.9}}
-    s = le.sanitize(o, FMAP)
+    s = le.sanitize(o, FMAP, INPUT)
     assert s["vision"]["material_look"]["value"] == "unknown"
     assert le.verify(s, FMAP, INPUT) == []
 
 
-def test_description_fabrication_still_hard_fails(unused=None):
+def test_description_fabrication_still_hard_fails():
     o = _good(); o["description"] = [{"text": "Certified to ISO 13006.", "sources": ["f1"]}]
-    assert le.verify(le.sanitize(o, FMAP), FMAP, INPUT)                   # still triggers retry
+    assert le.verify(le.sanitize(o, FMAP, INPUT), FMAP, INPUT)            # still triggers retry
 
 
 def test_novelty_hash_is_version_prefixed():

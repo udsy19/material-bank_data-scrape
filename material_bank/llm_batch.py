@@ -104,7 +104,7 @@ def collect_batch(conn: sqlite3.Connection, job_name: str, *, transport,
         if out is None:
             status, reason = "api_error", str(res.get("error") or "no/invalid response text")
         else:
-            out = sanitize(out, fmap)                  # drop bad tags (match realtime path)
+            out = sanitize(out, fmap, input_text)      # deterministic tags (match realtime path)
             fails = verify(out, fmap, input_text)
             status = "enriched" if not fails else "verifier_failed"
             reason = fails[0] if fails else None

@@ -15,3 +15,4 @@ reports/
 .env
 # local db backups
 data/backups/
+data/img_cache/

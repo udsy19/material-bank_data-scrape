@@ -1,0 +1,36 @@
+{
+  "use_case": {
+    "bathroom": ["bathroom", "bath ", "sanitary", "washroom", "shower", "toilet", "vanity", "lavatory", "wc "],
+    "kitchen": ["kitchen", "backsplash", "splashback", "countertop", "worktop"],
+    "living-room": ["living room", "living-room", "lounge", "drawing room"],
+    "bedroom": ["bedroom", "headboard"],
+    "outdoor": ["outdoor", "exterior", "facade", "garden", "terrace", "balcony", "frost", "weatherproof", "parking", "driveway", "alfresco", "landscape"],
+    "commercial": ["commercial", "office", "hospitality", "hotel", "retail", "showroom", "institutional", "corporate", "mall", "airport", "restaurant", "cafe", "lobby", "workspace"],
+    "residential": ["residential"],
+    "high-traffic": ["high traffic", "high-traffic", "heavy duty", "heavy-duty", "anti-skid", "anti skid", "antiskid", "anti-static", "anti static", "antistatic", "conductive", "industrial", "warehouse"],
+    "wet-area": ["wet area", "wet-area", "pool", "swimming", "spa", "wetroom"],
+    "flooring": ["floor", "flooring", "vitrified", "underfoot"],
+    "wall": ["wall", "cladding", "elevation", "wainscot"],
+    "facade": ["facade", "ventilated facade", "exterior elevation"],
+    "backsplash": ["backsplash", "splashback"],
+    "countertop": ["countertop", "worktop", "vanity top"],
+    "office": ["office", "workstation", "cubicle", "boardroom", "desk"],
+    "hospitality": ["hospitality", "hotel", "resort", "restaurant", "banquet", "lounge"]
+  },
+  "style": {
+    "modern": ["modern", "sleek", "clean line", "clean-line"],
+    "contemporary": ["contemporary"],
+    "traditional": ["traditional", "ethnic", "heritage", "mughal"],
+    "rustic": ["rustic", "distressed", "weathered", "farmhouse", "aged", "antique"],
+    "industrial": ["industrial", "concrete look", "concrete-look", "raw ", "loft"],
+    "minimalist": ["minimalist", "minimal", "understated", "pared"],
+    "scandinavian": ["scandinavian", "nordic", "scandi"],
+    "bohemian": ["bohemian", "boho", "eclectic"],
+    "coastal": ["coastal", "nautical", "mediterranean"],
+    "mid-century": ["mid-century", "mid century", "retro"],
+    "art-deco": ["art deco", "art-deco", "deco"],
+    "transitional": ["transitional"],
+    "classic": ["classic", "timeless", "elegant", "refined"],
+    "luxury": ["luxury", "luxe", "premium", "opulent", "royal", "regal", "marble look", "marble-look"]
+  }
+}
