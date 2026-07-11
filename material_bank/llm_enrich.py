@@ -222,6 +222,30 @@ def verify(output: dict, field_map: dict, input_text: str) -> list[str]:
     return _sentences_ok(output["description"], field_map, input_text, supplier_domain)
 
 
+def extract_json(text: str) -> dict:
+    """Parse model output that is *almost* JSON: strip ```json fences and trailing
+    prose, then extract the first balanced {...}. Recovers the 'Extra data' /
+    fence cases that responseMimeType doesn't always prevent, without a retry."""
+    t = (text or "").strip()
+    if t.startswith("```"):
+        t = re.sub(r"^```(?:json)?\s*|\s*```$", "", t, flags=re.S).strip()
+    try:
+        return json.loads(t)
+    except ValueError:
+        pass
+    start = t.find("{")
+    if start >= 0:
+        depth = 0
+        for i in range(start, len(t)):
+            if t[i] == "{":
+                depth += 1
+            elif t[i] == "}":
+                depth -= 1
+                if depth == 0:
+                    return json.loads(t[start:i + 1])
+    raise ValueError("no JSON object in model output")
+
+
 def _unpack(res):
     """Accept a rich client result {output, usage} or a bare output dict (fakes)."""
     if isinstance(res, dict) and "output" in res and "usage" in res:
@@ -387,7 +411,7 @@ def gemini_client(model: str = "gemini-flash-latest"):
             body = r.json()
             if r.status_code == 200 and "candidates" in body:
                 um = body.get("usageMetadata") or {}
-                return {"output": json.loads(body["candidates"][0]["content"]["parts"][0]["text"]),
+                return {"output": extract_json(body["candidates"][0]["content"]["parts"][0]["text"]),
                         "usage": {"input_tokens": um.get("promptTokenCount", 0),
                                   "output_tokens": um.get("candidatesTokenCount", 0)}}
             last = f"gemini {r.status_code}: {(body.get('error') or {}).get('status', '')}"

@@ -207,3 +207,13 @@ def test_budget_circuit_breaker_stops_on_real_spend(conn):
     assert out["enriched"] == 1                             # first processed, then breaker fires
     assert conn.execute("SELECT COUNT(*) FROM products WHERE llm_status IS NULL").fetchone()[0] == 1
     assert out["spend_inr"] > 1.0
+
+
+def test_extract_json_recovers_fences_and_extra_data():
+    assert le.extract_json('{"a": 1}') == {"a": 1}
+    assert le.extract_json('```json\n{"a": 1}\n```') == {"a": 1}          # markdown fence
+    assert le.extract_json('{"a": 1}\n\nHope this helps!') == {"a": 1}    # trailing prose
+    assert le.extract_json('Here you go: {"a": {"b": 2}} done') == {"a": {"b": 2}}  # balanced
+    import pytest as _p
+    with _p.raises(ValueError):
+        le.extract_json("no json here")
