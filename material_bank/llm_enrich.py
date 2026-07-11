@@ -290,53 +290,85 @@ def run(conn: sqlite3.Connection, *, client, client_strong=None, model_name: str
     return stats
 
 
+def _attempt_calls(client, client_strong, prompt, image_url, fmap, input_text, model_name, phase):
+    """Do the (slow, concurrency-friendly) network calls + verification, with NO
+    DB access. Returns (output|None, ok, [log-dicts]) — the caller writes."""
+    import time
+    logs, out, ok = [], None, False
+    for attempt, cl in enumerate((client, client, client_strong or client)):
+        t0 = time.monotonic()
+        try:
+            res = cl(prompt, image_url)
+        except Exception as exc:
+            logs.append({"model": model_name, "phase": phase, "attempt": attempt,
+                         "latency_ms": int((time.monotonic() - t0) * 1000),
+                         "status": "api_error", "fail_reason": str(exc)})
+            continue
+        latency = int((time.monotonic() - t0) * 1000)
+        o, usage = _unpack(res)
+        fails = verify(o, fmap, input_text)
+        logs.append({"model": model_name, "phase": phase, "attempt": attempt,
+                     "input_tokens": usage.get("input_tokens", 0),
+                     "output_tokens": usage.get("output_tokens", 0), "latency_ms": latency,
+                     "status": "enriched" if not fails else "verifier_failed",
+                     "fail_reason": (fails[0] if fails else None)})
+        if not fails:
+            out, ok = o, True
+            break
+    return out, ok, logs
+
+
 def drain_concurrent(db_path, *, model_name: str = "gemini-flash-latest", workers: int = 16,
-                     budget_inr: float | None = None, batch: int = 40, client_factory=None) -> dict:
-    """The production enrichment path: N threads, each a private connection +
-    client, partition products by id%workers (no claim contention), enrich until
-    dry or budget hit. Every call is on the ledger; watch spend live on /llm.
-    Fully resumable — a killed run just re-selects what's still un-enriched."""
+                     budget_inr: float | None = None, batch: int | None = None,
+                     client_factory=None) -> dict:
+    """The production enrichment path. Gemini calls run concurrently across a
+    thread pool; ALL DB writes go through ONE connection under a lock (writes are
+    ~1ms, the network call is the slow part and stays parallel) — so no
+    'database is locked' thrash. Budget breaker on real ledger spend. Fully
+    resumable: a killed run re-selects whatever is still un-enriched."""
     import threading
     from concurrent.futures import ThreadPoolExecutor
 
     from . import db
     from . import llm_accounting as acct
-    make_client = client_factory or (lambda: gemini_client(model_name))
-    stop = threading.Event()
+    client = (client_factory or (lambda: gemini_client(model_name)))()
+    control = db.connect(str(db_path), check_same_thread=False)
+    wlock = threading.Lock()
     totals = {"enriched": 0, "failed": 0}
-    lock = threading.Lock()
+    chunk = batch or workers * 3
 
-    def worker(wid: int) -> None:
-        conn = db.connect(str(db_path), check_same_thread=False)
-        client = make_client()
-        try:
-            while not stop.is_set():
-                if budget_inr is not None and acct.spend_since(conn, 1) >= budget_inr:
-                    stop.set(); break
-                rows = conn.execute(
-                    f"SELECT {_SELECT_COLS} FROM products WHERE ({_NEEDS_ENRICH}) "
-                    "AND (id % ?) = ? ORDER BY id LIMIT ?",
-                    (f"{PROMPT_VERSION}:%", workers, wid, batch)).fetchall()
-                if not rows:
-                    break
-                for row in rows:
-                    if stop.is_set():
-                        break
-                    r = enrich_one(conn, row, client=client, model_name=model_name)
-                    if r in ("enriched", "failed"):
-                        with lock:
-                            totals[r] += 1
-        finally:
-            conn.close()
+    def task(row):
+        input_text, fmap, image_url = serialise(row)
+        h = novelty_hash(input_text, image_url)
+        out, ok, logs = _attempt_calls(client, None, build_prompt(input_text, bool(image_url)),
+                                       image_url, fmap, input_text, model_name, "realtime")
+        ts = now_iso()
+        with wlock:                                   # writes serialized on one conn
+            for lg in logs:
+                acct.log_call(control, product_id=row["id"], prompt_version=PROMPT_VERSION, **lg)
+            if ok:
+                content = {**out, "_meta": {"basis": f"generated:llm:{model_name}:prompt_{PROMPT_VERSION}",
+                                            "at": ts}}
+                control.execute("UPDATE products SET llm_content=?, llm_hash=?, llm_status='enriched', "
+                                "llm_enriched_at=? WHERE id=?", (json.dumps(content), h, ts, row["id"]))
+            else:
+                control.execute("UPDATE products SET llm_hash=?, llm_status='enrich_failed', "
+                                "llm_enriched_at=? WHERE id=?", (h, ts, row["id"]))
+            control.commit()
+            totals["enriched" if ok else "failed"] += 1
 
     with ThreadPoolExecutor(max_workers=workers) as pool:
-        for f in [pool.submit(worker, i) for i in range(workers)]:
-            f.result()
-    control = db.connect(str(db_path))
-    out = {**totals, "spend_inr": acct.spend_since(control, 1),
-           "remaining": control.execute(
-               f"SELECT COUNT(*) FROM products WHERE {_NEEDS_ENRICH}", (f"{PROMPT_VERSION}:%",)
-           ).fetchone()[0]}
+        while True:
+            if budget_inr is not None and acct.spend_since(control, 1) >= budget_inr:
+                break
+            rows = control.execute(f"SELECT {_SELECT_COLS} FROM products WHERE {_NEEDS_ENRICH} "
+                                   "ORDER BY id LIMIT ?", (f"{PROMPT_VERSION}:%", chunk)).fetchall()
+            if not rows:
+                break
+            list(pool.map(task, rows))
+    remaining = control.execute(f"SELECT COUNT(*) FROM products WHERE {_NEEDS_ENRICH}",
+                                (f"{PROMPT_VERSION}:%",)).fetchone()[0]
+    out = {**totals, "spend_inr": acct.spend_since(control, 1), "remaining": remaining}
     control.close()
     return out
 
