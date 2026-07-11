@@ -229,37 +229,16 @@ _NEEDS_ENRICH = ("llm_status IS NULL OR llm_status='stale' OR llm_hash NOT LIKE 
 
 def enrich_one(conn, row, *, client, client_strong=None, model_name: str = "gemini-flash-latest",
                phase: str = "realtime") -> str:
-    """Enrich one product: call -> verify -> log every attempt -> write. Returns
-    'enriched' | 'failed' | 'skipped'. Commits its own row (safe under threads)."""
-    import time
-
+    """Enrich one product: call -> verify (with feedback-retry) -> log every
+    attempt -> write. Returns 'enriched' | 'failed' | 'skipped'."""
     from . import llm_accounting as acct
     input_text, fmap, image_url = serialise(row)
     h = novelty_hash(input_text, image_url)
     if row["llm_hash"] == h:
         return "skipped"
-    prompt = build_prompt(input_text, bool(image_url))
-    out, ok = None, False
-    for attempt, cl in enumerate((client, client, client_strong or client)):
-        t0 = time.monotonic()
-        try:
-            res = cl(prompt, image_url)
-        except Exception as exc:
-            acct.log_call(conn, product_id=row["id"], model=model_name, phase=phase, attempt=attempt,
-                          latency_ms=int((time.monotonic() - t0) * 1000), status="api_error",
-                          fail_reason=str(exc), prompt_version=PROMPT_VERSION)
-            continue
-        latency = int((time.monotonic() - t0) * 1000)
-        out, usage = _unpack(res)
-        fails = verify(out, fmap, input_text)
-        acct.log_call(conn, product_id=row["id"], model=model_name, phase=phase, attempt=attempt,
-                      input_tokens=usage.get("input_tokens", 0),
-                      output_tokens=usage.get("output_tokens", 0), latency_ms=latency,
-                      status="enriched" if not fails else "verifier_failed",
-                      fail_reason=(fails[0] if fails else None), prompt_version=PROMPT_VERSION)
-        if not fails:
-            ok = True
-            break
+    out, ok, logs = _attempt_calls(client, input_text, image_url, fmap, model_name, phase)
+    for lg in logs:
+        acct.log_call(conn, product_id=row["id"], prompt_version=PROMPT_VERSION, **lg)
     ts = now_iso()
     if ok:
         content = {**out, "_meta": {"basis": f"generated:llm:{model_name}:prompt_{PROMPT_VERSION}", "at": ts}}
@@ -290,19 +269,26 @@ def run(conn: sqlite3.Connection, *, client, client_strong=None, model_name: str
     return stats
 
 
-def _attempt_calls(client, client_strong, prompt, image_url, fmap, input_text, model_name, phase):
-    """Do the (slow, concurrency-friendly) network calls + verification, with NO
-    DB access. Returns (output|None, ok, [log-dicts]) — the caller writes."""
+def _attempt_calls(client, input_text, image_url, fmap, model_name, phase, *, max_attempts: int = 2):
+    """Network calls + verification, NO DB access (concurrency-friendly). On a
+    verifier failure, the next attempt gets the rejection reason appended so the
+    model can FIX it (far better + cheaper than a blind re-roll). Returns
+    (output|None, ok, [log-dicts]) for the caller to write."""
     import time
-    logs, out, ok = [], None, False
-    for attempt, cl in enumerate((client, client, client_strong or client)):
+    base = build_prompt(input_text, bool(image_url))
+    logs, out, ok, prev = [], None, False, None
+    for attempt in range(max_attempts):
+        prompt = base if prev is None else (
+            base + f"\n\nYOUR PREVIOUS OUTPUT WAS REJECTED — reason: {prev}. "
+                   "Return corrected strict JSON that fixes exactly this and nothing else.")
         t0 = time.monotonic()
         try:
-            res = cl(prompt, image_url)
+            res = client(prompt, image_url)
         except Exception as exc:
             logs.append({"model": model_name, "phase": phase, "attempt": attempt,
                          "latency_ms": int((time.monotonic() - t0) * 1000),
                          "status": "api_error", "fail_reason": str(exc)})
+            prev = None
             continue
         latency = int((time.monotonic() - t0) * 1000)
         o, usage = _unpack(res)
@@ -315,6 +301,7 @@ def _attempt_calls(client, client_strong, prompt, image_url, fmap, input_text, m
         if not fails:
             out, ok = o, True
             break
+        prev = fails[0]
     return out, ok, logs
 
 
@@ -340,8 +327,7 @@ def drain_concurrent(db_path, *, model_name: str = "gemini-flash-latest", worker
     def task(row):
         input_text, fmap, image_url = serialise(row)
         h = novelty_hash(input_text, image_url)
-        out, ok, logs = _attempt_calls(client, None, build_prompt(input_text, bool(image_url)),
-                                       image_url, fmap, input_text, model_name, "realtime")
+        out, ok, logs = _attempt_calls(client, input_text, image_url, fmap, model_name, "realtime")
         ts = now_iso()
         with wlock:                                   # writes serialized on one conn
             for lg in logs:
