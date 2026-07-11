@@ -128,10 +128,30 @@ def test_style_tags_kept_only_with_evidence_or_image():
 
 
 def test_sanitize_nulls_out_of_vocab_vision():
-    o = _good(); o["vision"] = {"material_look": {"value": "Marble Look", "confidence": 0.9}}
+    o = _good(); o["vision"] = {"pattern": {"value": "swirly", "confidence": 0.9},
+                                "surface_look": {"value": "glossy", "confidence": 0.8}}
     s = le.sanitize(o, FMAP, INPUT)
-    assert s["vision"]["material_look"]["value"] == "unknown"
+    assert s["vision"]["pattern"]["value"] == "unknown"          # out-of-vocab -> nulled
+    assert s["vision"]["surface_look"]["value"] == "glossy"      # valid -> kept
     assert le.verify(s, FMAP, INPUT) == []
+
+
+def test_feature_bullets_drop_fabrication_keep_clean():
+    o = _good()
+    o["feature_bullets"] = ["Large-format marble-look tile", "Rated PEI 5 for heavy traffic",
+                            "Certified to ISO 13006", "  "]
+    s = le.sanitize(o, FMAP, INPUT)
+    assert "Large-format marble-look tile" in s["feature_bullets"]
+    assert not any("PEI 5" in b or "ISO 13006" in b for b in s["feature_bullets"])  # invented -> dropped
+    assert "" not in s["feature_bullets"] and "  " not in s["feature_bullets"]
+
+
+def test_search_keywords_lowercased_deduped_capped():
+    o = _good()
+    o["search_keywords"] = ["Carrara", "carrara", "MARBLE", "large-format"] + [f"k{i}" for i in range(10)]
+    s = le.sanitize(o, FMAP, INPUT)
+    assert s["search_keywords"][:3] == ["carrara", "marble", "large-format"]  # deduped, lowercased
+    assert len(s["search_keywords"]) <= 8
 
 
 def test_description_fabrication_still_hard_fails():
@@ -161,7 +181,7 @@ def conn(tmp_path):
 
 def test_run_enriches_verifies_and_is_novelty_gated(conn):
     client = lambda prompt, img: {"output": _good(), "usage": {"input_tokens": 500, "output_tokens": 200}}
-    out = le.run(conn, client=client, budget_inr=100)
+    out = le.run(conn, client=client, budget_inr=100, prepare=lambda u: None)
     assert out["enriched"] == 1 and out["spend_inr"] > 0
     # every call is on the ledger with a real cost
     call = conn.execute("SELECT status, input_tokens, cost_inr FROM llm_calls").fetchone()
@@ -170,10 +190,10 @@ def test_run_enriches_verifies_and_is_novelty_gated(conn):
     assert r["llm_status"] == "enriched"
     assert json.loads(r["llm_content"])["_meta"]["basis"].startswith("generated:llm:")
     # second run: unchanged input -> novelty-gated, no new work
-    assert le.run(conn, client=client)["skipped_novelty"] == 0  # already 'enriched', not re-scanned
+    assert le.run(conn, client=client, prepare=lambda u: None)["skipped_novelty"] == 0  # already 'enriched', not re-scanned
     # a re-scan (status stale) hits the novelty hash and skips
     conn.execute("UPDATE products SET llm_status='stale'"); conn.commit()
-    assert le.run(conn, client=client)["skipped_novelty"] == 1
+    assert le.run(conn, client=client, prepare=lambda u: None)["skipped_novelty"] == 1
 
 
 def test_run_escalates_then_marks_failed(conn):
@@ -196,10 +216,10 @@ def test_drain_concurrent_enriches_all_and_is_resumable(tmp_path):
     conn.commit(); conn.close()
 
     factory = lambda: (lambda p, i: {"output": _good(), "usage": {"input_tokens": 100, "output_tokens": 50}})
-    out = le.drain_concurrent(dbp, workers=3, client_factory=factory)
+    out = le.drain_concurrent(dbp, workers=3, client_factory=factory, prepare=lambda u: None)
     assert out["enriched"] == 6 and out["remaining"] == 0 and out["spend_inr"] > 0
     # resumable: a second drain finds nothing left
-    assert le.drain_concurrent(dbp, workers=3, client_factory=factory)["enriched"] == 0
+    assert le.drain_concurrent(dbp, workers=3, client_factory=factory, prepare=lambda u: None)["enriched"] == 0
     c = db_mod.connect(dbp)
     assert c.execute("SELECT COUNT(*) FROM llm_calls WHERE status='enriched'").fetchone()[0] == 6
     c.close()
@@ -213,7 +233,7 @@ def test_budget_circuit_breaker_stops_on_real_spend(conn):
         supplier_domain="orientbell.com")
     conn.commit()
     costly = lambda p, i: {"output": _good(), "usage": {"input_tokens": 1_000_000, "output_tokens": 1_000_000}}
-    out = le.run(conn, client=costly, budget_inr=1.0)      # one call ~₹200 >> ₹1 budget
+    out = le.run(conn, client=costly, budget_inr=1.0, prepare=lambda u: None)      # one call ~₹200 >> ₹1 budget
     assert out["enriched"] == 1                             # first processed, then breaker fires
     assert conn.execute("SELECT COUNT(*) FROM products WHERE llm_status IS NULL").fetchone()[0] == 1
     assert out["spend_inr"] > 1.0

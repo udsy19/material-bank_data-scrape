@@ -22,7 +22,7 @@ import sqlite3
 
 from .db import now_iso
 
-PROMPT_VERSION = "v3"
+PROMPT_VERSION = "v4"
 
 # words that don't count as "new information" when checking for restatement filler
 _STOPWORDS = {
@@ -54,6 +54,14 @@ USE_CASE_VOCAB = set(_UC_EVID)
 MATERIAL_VOCAB = {
     "marble", "granite", "wood", "stone", "concrete", "terrazzo", "metal",
     "ceramic", "porcelain", "glass", "fabric", "leather", "laminate", "quartz",
+}
+PATTERN_VOCAB = {
+    "marble", "wood", "stone", "concrete", "terrazzo", "geometric", "floral",
+    "solid", "plain", "abstract", "mosaic", "textile", "metallic", "cement",
+}
+SURFACE_VOCAB = {
+    "glossy", "matte", "satin", "textured", "structured", "polished", "rustic",
+    "sugar", "lappato", "carving", "honed", "brushed",
 }
 # a sentence citing only the image (img1) is allowed only for a visual claim.
 # Covers visual descriptors, colour names, and form/shape words (all observable
@@ -109,27 +117,31 @@ def novelty_hash(input_text: str, image_url: str | None) -> str:
 
 
 SYSTEM_PROMPT = f"""You write SHORT, useful catalog copy for architectural materials, and you NEVER invent facts.
+The product IMAGE is attached when available — describe what you actually SEE, don't guess.
 Rules (prompt {PROMPT_VERSION}):
-- SYNTHESIZE, do not enumerate. 2-4 sentences that tell a buyer what it is, what it's like, and where it fits — NOT a restatement of the fields. A sentence that only repeats one field's value is banned.
-- NEVER write field ids (f1, img1), field names, the supplier domain, ".com", "category standard", or internal plumbing in the prose. Write for a customer, not about the database.
-- Every sentence and tag still CITES its source id(s) in the JSON `sources` array (not in the prose text). Cite img1 only for visual claims (colour, pattern, texture, material look, finish, shape).
-- Never state a number, dimension, or standard code (ISO/IS/PEI/BIS) not in the input. No superlatives or performance claims (waterproof, scratch-proof, best-in-class, outdoor) unless that exact property is in the input.
-- Tags: at most {_MAX_TAGS} style and {_MAX_TAGS} use-case tags. Prefer two right tags over six safe ones. A tag must be justified by a DISTINGUISHING attribute (size, finish, colour, the image) — not merely the name/brand/category. Empty style_tags ([]) is perfectly fine.
+- description: 3-4 sentences that SYNTHESIZE what it is, what it looks like, and where it fits — NOT a restatement of the fields. A sentence that only repeats one field's value is banned. Cite source id(s) in the JSON `sources` array (never in the prose). Cite img1 only for visual claims (colour, pattern, texture, finish, shape) — only when the image is attached.
+- NEVER write field ids (f1, img1), field names, the supplier domain, ".com", or internal plumbing in the prose. Write for a customer, not about the database.
+- Never state a number, dimension, or standard code (ISO/IS/PEI/BIS) not in the input. No superlatives/performance claims (waterproof, scratch-proof, best-in-class, outdoor) unless that exact property is in the input.
+- feature_bullets: 3-5 short factual selling points from the input/image (no invented specs).
+- search_keywords: 5-8 alternative terms a buyer might search (synonyms, looks, e.g. "carrara", "large-format", "wood-look"). Lowercase words/phrases.
+- style_tags: 0-3 from the allowed vocab, only if the image or text supports it. Empty [] is fine.
+- vision (from the IMAGE only; "unknown" if no image or unsure): colour_primary, pattern, surface_look, material_appearance.
 """
 
 
 def build_prompt(input_text: str, has_image: bool) -> str:
     return (f"{SYSTEM_PROMPT}\n"
-            f"ALLOWED style_tags (design styles only, [] if none fit): {sorted(STYLE_VOCAB)}\n"
-            f"ALLOWED use_case_tags: {sorted(USE_CASE_VOCAB)}\n"
-            f"vision.material_look — ONLY one of {sorted(MATERIAL_VOCAB)} or \"unknown\".\n"
+            f"ALLOWED style_tags: {sorted(STYLE_VOCAB)}\n"
+            f"vision.pattern — one of {sorted(PATTERN_VOCAB)} or \"unknown\".\n"
+            f"vision.surface_look — one of {sorted(SURFACE_VOCAB)} or \"unknown\".\n"
+            f"vision.material_appearance — one of {sorted(MATERIAL_VOCAB)} or \"unknown\".\n"
             f"vision.colour_primary — a single common colour word or \"unknown\".\n"
             f"INPUT FIELDS:\n{input_text}\n"
-            f"IMAGE: {'img1 attached' if has_image else 'none'}\n"
-            "Return JSON: {description:[{text,sources[]}], style_tags:[{tag,sources[]}], "
-            "use_case_tags:[{tag,sources[]}], vision:{colour_primary:{value,confidence}, "
-            "material_look:{value,confidence}, finish:{value,confidence}}, "
-            "self_report:{input_sufficient:bool,notes}}")
+            f"IMAGE: {'attached (describe what you see)' if has_image else 'NONE — set all vision values to unknown and do not cite img1'}\n"
+            "Return strict JSON: {description:[{text,sources[]}], feature_bullets:[str], "
+            "search_keywords:[str], style_tags:[{tag,sources[]}], "
+            "vision:{colour_primary:{value,confidence}, pattern:{value,confidence}, "
+            "surface_look:{value,confidence}, material_appearance:{value,confidence}}}")
 
 
 def _words(s: str) -> set:
@@ -185,12 +197,33 @@ def derive_use_case_tags(text: str) -> list[str]:
     return [tag for tag, kws in _UC_EVID.items() if _has_evidence(kws, t)][:_MAX_TAGS]
 
 
+def _bullet_clean(b, input_text: str) -> bool:
+    """A feature bullet is kept if it's a non-empty string that invents no number,
+    standard, or banned claim absent from the input (same honesty bar as prose)."""
+    if not isinstance(b, str) or not b.strip():
+        return False
+    low, itl = b.lower(), input_text.lower()
+    if any(n not in input_text for n in _NUM_RE.findall(b)):
+        return False
+    if any(s.replace(" ", "").lower() not in itl.replace(" ", "") for s in _STD_RE.findall(b)):
+        return False
+    return not any(p in low and (need is None or need not in itl) for p, need in _BANNED.items())
+
+
+def _vision_vocab(v: dict, key: str, vocab: set) -> None:
+    val = (v.get(key) or {}).get("value")
+    if val and val != "unknown" and str(val).lower() not in vocab:
+        v[key] = {"value": "unknown", "confidence": 0.0}
+
+
 def sanitize(output: dict, field_map: dict, input_text: str = "") -> dict:
-    """Make the tags robust WITHOUT ever triggering a retry:
-      - use_case_tags: replaced with deterministic, evidence-derived tags.
-      - style_tags: keep the LLM's only with textual evidence OR image support.
-      - vision.material_look: null an out-of-vocab value.
-    The description is never touched here — it's hard-verified by ``verify``."""
+    """Make everything except the description robust WITHOUT a retry:
+      - use_case_tags: deterministic, evidence-derived.
+      - style_tags: LLM's, kept only with textual evidence OR image support.
+      - feature_bullets: drop any that fabricate; cap 5.
+      - search_keywords: lowercase, dedupe, cap 8.
+      - vision: null out-of-vocab pattern/surface_look/material_appearance.
+    The description is hard-verified by ``verify`` (the only thing that retries)."""
     if not isinstance(output, dict):
         return output
     o = dict(output)
@@ -206,23 +239,31 @@ def sanitize(output: dict, field_map: dict, input_text: str = "") -> dict:
         if ev or "img1" in srcs:
             style.append({"tag": tag, "sources": ["evidence"] if ev else ["img1"]})
     o["style_tags"] = style[:_MAX_TAGS]
+    o["feature_bullets"] = [b.strip() for b in (o.get("feature_bullets") or [])
+                            if _bullet_clean(b, input_text)][:5]
+    seen, kw = set(), []
+    for k in (o.get("search_keywords") or []):
+        kl = k.strip().lower() if isinstance(k, str) else ""
+        if kl and kl not in seen:
+            seen.add(kl); kw.append(kl)
+    o["search_keywords"] = kw[:8]
     v = dict(o.get("vision") or {})
-    ml = (v.get("material_look") or {}).get("value")
-    if ml and ml != "unknown" and ml not in MATERIAL_VOCAB:
-        v["material_look"] = {"value": "unknown", "confidence": 0.0}
+    for key, vocab in (("pattern", PATTERN_VOCAB), ("surface_look", SURFACE_VOCAB),
+                       ("material_appearance", MATERIAL_VOCAB)):
+        _vision_vocab(v, key, vocab)
     o["vision"] = v
     return o
 
 
 def verify(output: dict, field_map: dict, input_text: str) -> list[str]:
-    """HARD verification — the checks that must trigger a retry: schema present,
-    and the DESCRIPTION honest (no fabrication/plumbing/restatement/bad cites).
-    Tag/vision hygiene is handled by ``sanitize`` (drop, don't retry). [] passes."""
+    """HARD verification — the ONLY thing that triggers a retry: the DESCRIPTION
+    is present and honest (no fabrication/plumbing/restatement/bad cites).
+    Everything else is handled by ``sanitize`` (drop, don't retry). [] passes."""
     if not isinstance(output, dict):
         return ["not a JSON object"]
     supplier_domain = next((v for n, v in field_map.values() if n == "supplier_domain"), None)
-    if "description" not in output or "vision" not in output:
-        return ["missing description/vision"]
+    if "description" not in output:
+        return ["missing description"]
     if not isinstance(output["description"], list) or not output["description"]:
         return ["description must be a non-empty list"]
     if len(output["description"]) > 6:
@@ -265,21 +306,29 @@ _SELECT_COLS = f"id, {', '.join(_INPUT_FIELDS)}, image_url, llm_hash"
 _NEEDS_ENRICH = ("llm_status IS NULL OR llm_status='stale' OR llm_hash NOT LIKE ?")
 
 
+def _prepare_default(url):
+    from . import image_prep
+    return image_prep.prepare_image(url) if url else None
+
+
 def enrich_one(conn, row, *, client, client_strong=None, model_name: str = "gemini-flash-latest",
-               phase: str = "realtime") -> str:
-    """Enrich one product: call -> verify (with feedback-retry) -> log every
-    attempt -> write. Returns 'enriched' | 'failed' | 'skipped'."""
+               phase: str = "realtime", prepare=_prepare_default) -> str:
+    """Enrich one product: prepare the image -> call -> verify (feedback-retry) ->
+    log every attempt -> write. Returns 'enriched' | 'failed' | 'skipped'."""
     from . import llm_accounting as acct
     input_text, fmap, image_url = serialise(row)
     h = novelty_hash(input_text, image_url)
     if row["llm_hash"] == h:
         return "skipped"
-    out, ok, logs = _attempt_calls(client, input_text, image_url, fmap, model_name, phase)
+    image = prepare(image_url)
+    out, ok, logs = _attempt_calls(client, input_text, image, fmap, model_name, phase)
     for lg in logs:
         acct.log_call(conn, product_id=row["id"], prompt_version=PROMPT_VERSION, **lg)
     ts = now_iso()
     if ok:
-        content = {**out, "_meta": {"basis": f"generated:llm:{model_name}:prompt_{PROMPT_VERSION}", "at": ts}}
+        content = {**out, "_meta": {"basis": f"generated:llm:{model_name}:prompt_{PROMPT_VERSION}",
+                                    "image": "used" if image else ("none" if not image_url else "unfetched"),
+                                    "at": ts}}
         conn.execute("UPDATE products SET llm_content=?, llm_hash=?, llm_status='enriched', "
                      "llm_enriched_at=? WHERE id=?", (json.dumps(content), h, ts, row["id"]))
     else:
@@ -290,7 +339,8 @@ def enrich_one(conn, row, *, client, client_strong=None, model_name: str = "gemi
 
 
 def run(conn: sqlite3.Connection, *, client, client_strong=None, model_name: str = "gemini-flash-latest",
-        budget_inr: float | None = None, limit: int = 100, phase: str = "realtime") -> dict:
+        budget_inr: float | None = None, limit: int = 100, phase: str = "realtime",
+        prepare=_prepare_default) -> dict:
     """Sequential novelty-gated, budget-capped pass (used by tests + small runs).
     The budget circuit-breaker reads REAL daily spend from the ledger."""
     from . import llm_accounting as acct
@@ -301,19 +351,19 @@ def run(conn: sqlite3.Connection, *, client, client_strong=None, model_name: str
         if budget_inr is not None and acct.spend_since(conn, 1) >= budget_inr:
             break
         r = enrich_one(conn, row, client=client, client_strong=client_strong,
-                       model_name=model_name, phase=phase)
+                       model_name=model_name, phase=phase, prepare=prepare)
         stats["enriched" if r == "enriched" else "failed" if r == "failed" else "skipped_novelty"] += 1
     stats["spend_inr"] = acct.spend_since(conn, 1)
     return stats
 
 
-def _attempt_calls(client, input_text, image_url, fmap, model_name, phase, *, max_attempts: int = 2):
-    """Network calls + verification, NO DB access (concurrency-friendly). On a
-    verifier failure, the next attempt gets the rejection reason appended so the
-    model can FIX it (far better + cheaper than a blind re-roll). Returns
-    (output|None, ok, [log-dicts]) for the caller to write."""
+def _attempt_calls(client, input_text, image, fmap, model_name, phase, *, max_attempts: int = 2):
+    """Network calls + verification, NO DB access (concurrency-friendly). ``image``
+    is prepared JPEG bytes (or None). On a verifier failure the next attempt gets
+    the rejection reason appended so the model FIXES it (cheaper than a blind
+    re-roll). Returns (output|None, ok, [log-dicts]) for the caller to write."""
     import time
-    base = build_prompt(input_text, bool(image_url))
+    base = build_prompt(input_text, bool(image))
     logs, out, ok, prev = [], None, False, None
     for attempt in range(max_attempts):
         prompt = base if prev is None else (
@@ -321,7 +371,7 @@ def _attempt_calls(client, input_text, image_url, fmap, model_name, phase, *, ma
                    "Return corrected strict JSON that fixes exactly this and nothing else.")
         t0 = time.monotonic()
         try:
-            res = client(prompt, image_url)
+            res = client(prompt, image)
         except Exception as exc:
             logs.append({"model": model_name, "phase": phase, "attempt": attempt,
                          "latency_ms": int((time.monotonic() - t0) * 1000),
@@ -346,10 +396,10 @@ def _attempt_calls(client, input_text, image_url, fmap, model_name, phase, *, ma
 
 def drain_concurrent(db_path, *, model_name: str = "gemini-flash-latest", workers: int = 16,
                      budget_inr: float | None = None, batch: int | None = None,
-                     client_factory=None) -> dict:
-    """The production enrichment path. Gemini calls run concurrently across a
-    thread pool; ALL DB writes go through ONE connection under a lock (writes are
-    ~1ms, the network call is the slow part and stays parallel) — so no
+                     client_factory=None, prepare=_prepare_default) -> dict:
+    """The production enrichment path. Image-prep + Gemini calls run concurrently
+    across a thread pool; ALL DB writes go through ONE connection under a lock
+    (writes are ~1ms, the network is the slow part and stays parallel) — so no
     'database is locked' thrash. Budget breaker on real ledger spend. Fully
     resumable: a killed run re-selects whatever is still un-enriched."""
     import threading
@@ -366,13 +416,15 @@ def drain_concurrent(db_path, *, model_name: str = "gemini-flash-latest", worker
     def task(row):
         input_text, fmap, image_url = serialise(row)
         h = novelty_hash(input_text, image_url)
-        out, ok, logs = _attempt_calls(client, input_text, image_url, fmap, model_name, "realtime")
+        image = prepare(image_url)                     # fetch+resize (cached) — concurrent
+        out, ok, logs = _attempt_calls(client, input_text, image, fmap, model_name, "realtime")
         ts = now_iso()
         with wlock:                                   # writes serialized on one conn
             for lg in logs:
                 acct.log_call(control, product_id=row["id"], prompt_version=PROMPT_VERSION, **lg)
             if ok:
                 content = {**out, "_meta": {"basis": f"generated:llm:{model_name}:prompt_{PROMPT_VERSION}",
+                                            "image": "used" if image else ("none" if not image_url else "unfetched"),
                                             "at": ts}}
                 control.execute("UPDATE products SET llm_content=?, llm_hash=?, llm_status='enriched', "
                                 "llm_enriched_at=? WHERE id=?", (json.dumps(content), h, ts, row["id"]))
@@ -404,13 +456,18 @@ def gemini_client(model: str = "gemini-flash-latest"):
     Returns a callable(prompt, image_url) -> {output, usage}."""
     import os
 
-    def _call(prompt: str, image_url: str | None) -> dict:
+    def _call(prompt: str, image_jpeg: bytes | None) -> dict:
         import time
 
         from curl_cffi import requests
+
+        from . import image_prep
         key = os.environ["GEMINI_API_KEY"]
         url = f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent"
-        payload = {"contents": [{"parts": [{"text": prompt}]}],
+        parts = [{"text": prompt}]
+        if image_jpeg:
+            parts.append(image_prep.as_inline_data(image_jpeg))     # the image the model sees
+        payload = {"contents": [{"parts": parts}],
                    "generationConfig": {"responseMimeType": "application/json"}}
         last = ""
         for i in range(4):                             # backoff-retry transient errors

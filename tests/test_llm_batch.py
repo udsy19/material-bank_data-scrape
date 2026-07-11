@@ -38,7 +38,7 @@ class FakeTransport:
 
 def test_build_batch_request_shape(conn):
     row = conn.execute(f"SELECT id, {', '.join(lb._INPUT_FIELDS)}, image_url FROM products LIMIT 1").fetchone()
-    req = lb.build_batch_request(row)
+    req = lb.build_batch_request(row, prepare=lambda u: None)
     assert req["key"] == str(row["id"])
     assert req["request"]["generationConfig"]["responseMimeType"] == "application/json"
     assert "Emperador" in req["request"]["contents"][0]["parts"][0]["text"]
@@ -46,12 +46,12 @@ def test_build_batch_request_shape(conn):
 
 def test_submit_marks_rows_batched(conn):
     t = FakeTransport([])
-    out = lb.submit_batch(conn, transport=t, limit=10)
+    out = lb.submit_batch(conn, transport=t, limit=10, prepare=lambda u: None)
     assert out["count"] == 2 and out["job_name"] == "operations/batch-123"
     assert len(t.submitted) == 2
     assert conn.execute("SELECT COUNT(*) FROM products WHERE llm_status='batched'").fetchone()[0] == 2
     # a second submit finds nothing new (already batched)
-    assert lb.submit_batch(conn, transport=t, limit=10)["count"] == 0
+    assert lb.submit_batch(conn, transport=t, limit=10, prepare=lambda u: None)["count"] == 0
 
 
 def test_collect_verifies_and_writes(conn):

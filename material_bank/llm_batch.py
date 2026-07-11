@@ -37,15 +37,24 @@ from .llm_enrich import (
 )
 
 
-def build_batch_request(row) -> dict:
-    """One batch line: {key, request}. key = product id (routes the result back)."""
+def _prep_image(url):
+    from .image_prep import prepare_image
+    return prepare_image(url) if url else None
+
+
+def build_batch_request(row, *, prepare=_prep_image) -> dict:
+    """One batch line: {key, request} with the ≤384px image attached. key =
+    product id (routes the result back)."""
+    from .image_prep import as_inline_data
     input_text, _fmap, image_url = serialise(row)
+    image = prepare(image_url)
+    parts = [{"text": build_prompt(input_text, bool(image))}]
+    if image:
+        parts.append(as_inline_data(image))
     return {
         "key": str(row["id"]),
-        "request": {
-            "contents": [{"parts": [{"text": build_prompt(input_text, bool(image_url))}]}],
-            "generationConfig": {"responseMimeType": "application/json"},
-        },
+        "request": {"contents": [{"parts": parts}],
+                    "generationConfig": {"responseMimeType": "application/json"}},
     }
 
 
@@ -57,14 +66,15 @@ def _select(conn: sqlite3.Connection, limit: int):
         "ORDER BY id LIMIT ?", (f"{PROMPT_VERSION}:%", limit)).fetchall()
 
 
-def submit_batch(conn: sqlite3.Connection, *, transport, limit: int = 5000) -> dict:
+def submit_batch(conn: sqlite3.Connection, *, transport, limit: int = 5000,
+                 prepare=_prep_image) -> dict:
     """Build requests for novelty-gated products and submit one batch job.
     Marks submitted rows 'batched' (with the version-stamped hash) so a second
     submit doesn't duplicate them. Returns {job_name, count}."""
     rows = _select(conn, limit)
     if not rows:
         return {"job_name": None, "count": 0}
-    requests = [build_batch_request(r) for r in rows]
+    requests = [build_batch_request(r, prepare=prepare) for r in rows]
     job_name = transport.submit(requests)
     ts = now_iso()
     conn.executemany(
