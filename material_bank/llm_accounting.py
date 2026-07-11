@@ -19,7 +19,9 @@ from .db import now_iso
 USD_INR = 83.0                              # update as needed; shown in the report
 # model -> (input $/1M tokens, output $/1M tokens), published Gemini rates.
 PRICING = {
+    "gemini-flash-latest": (0.30, 2.50),        # alias -> 2.5-flash rate
     "gemini-2.5-flash": (0.30, 2.50),
+    "gemini-flash-lite-latest": (0.10, 0.40),
     "gemini-2.5-flash-lite": (0.10, 0.40),
     "gemini-2.5-pro": (1.25, 10.00),
     "gemini-2.0-flash": (0.10, 0.40),

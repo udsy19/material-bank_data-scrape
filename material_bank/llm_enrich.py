@@ -223,72 +223,128 @@ def _unpack(res):
     return res, {}
 
 
-def run(conn: sqlite3.Connection, *, client, client_strong=None, model_name: str = "gemini-2.5-flash",
-        budget_inr: float | None = None, limit: int = 100, phase: str = "realtime") -> dict:
-    """Novelty-gated, budget-capped enrichment pass. Every API call — including
-    retries, escalations, and failures — is logged to the llm_calls ledger with
-    its actual tokens + ₹ cost; the budget circuit-breaker reads REAL spend from
-    that ledger. Failures retry once, then escalate, then mark enrich_failed."""
+_SELECT_COLS = f"id, {', '.join(_INPUT_FIELDS)}, image_url, llm_hash"
+_NEEDS_ENRICH = ("llm_status IS NULL OR llm_status='stale' OR llm_hash NOT LIKE ?")
+
+
+def enrich_one(conn, row, *, client, client_strong=None, model_name: str = "gemini-flash-latest",
+               phase: str = "realtime") -> str:
+    """Enrich one product: call -> verify -> log every attempt -> write. Returns
+    'enriched' | 'failed' | 'skipped'. Commits its own row (safe under threads)."""
     import time
 
     from . import llm_accounting as acct
-    rows = conn.execute(
-        f"SELECT id, {', '.join(_INPUT_FIELDS)}, image_url, llm_hash "
-        "FROM products WHERE llm_status IS NULL OR llm_status='stale' "
-        "OR llm_hash NOT LIKE ? "                    # re-enrich rows below the current prompt version
-        "ORDER BY id LIMIT ?", (f"{PROMPT_VERSION}:%", limit)).fetchall()
-    stats = {"scanned": len(rows), "enriched": 0, "failed": 0, "skipped_novelty": 0,
-             "api_errors": 0, "spend_inr": 0.0}
-    for row in rows:
-        input_text, fmap, image_url = serialise(row)
-        h = novelty_hash(input_text, image_url)
-        if row["llm_hash"] == h:
-            stats["skipped_novelty"] += 1
-            continue
-        if budget_inr is not None and acct.spend_since(conn, 1) >= budget_inr:
-            break                                     # circuit breaker on REAL daily spend
-        prompt = build_prompt(input_text, bool(image_url))
-        out, ok = None, False
-        for attempt, cl in enumerate((client, client, client_strong or client)):
-            t0 = time.monotonic()
-            try:
-                res = cl(prompt, image_url)
-            except Exception as exc:
-                acct.log_call(conn, product_id=row["id"], model=model_name, phase=phase,
-                              attempt=attempt, latency_ms=int((time.monotonic() - t0) * 1000),
-                              status="api_error", fail_reason=str(exc), prompt_version=PROMPT_VERSION)
-                stats["api_errors"] += 1
-                continue
-            latency = int((time.monotonic() - t0) * 1000)
-            out, usage = _unpack(res)
-            fails = verify(out, fmap, input_text)
+    input_text, fmap, image_url = serialise(row)
+    h = novelty_hash(input_text, image_url)
+    if row["llm_hash"] == h:
+        return "skipped"
+    prompt = build_prompt(input_text, bool(image_url))
+    out, ok = None, False
+    for attempt, cl in enumerate((client, client, client_strong or client)):
+        t0 = time.monotonic()
+        try:
+            res = cl(prompt, image_url)
+        except Exception as exc:
             acct.log_call(conn, product_id=row["id"], model=model_name, phase=phase, attempt=attempt,
-                          input_tokens=usage.get("input_tokens", 0),
-                          output_tokens=usage.get("output_tokens", 0), latency_ms=latency,
-                          status="enriched" if not fails else "verifier_failed",
-                          fail_reason=(fails[0] if fails else None), prompt_version=PROMPT_VERSION)
-            if not fails:
-                ok = True
-                break
-        ts = now_iso()
-        if ok:
-            content = {**out, "_meta": {"basis": f"generated:llm:{model_name}:prompt_{PROMPT_VERSION}",
-                                        "at": ts}}
-            conn.execute("UPDATE products SET llm_content=?, llm_hash=?, llm_status='enriched', "
-                         "llm_enriched_at=? WHERE id=?", (json.dumps(content), h, ts, row["id"]))
-            stats["enriched"] += 1
-        else:
-            conn.execute("UPDATE products SET llm_hash=?, llm_status='enrich_failed', "
-                         "llm_enriched_at=? WHERE id=?", (h, ts, row["id"]))
-            stats["failed"] += 1
-        conn.commit()                                  # durable ledger + status per product
+                          latency_ms=int((time.monotonic() - t0) * 1000), status="api_error",
+                          fail_reason=str(exc), prompt_version=PROMPT_VERSION)
+            continue
+        latency = int((time.monotonic() - t0) * 1000)
+        out, usage = _unpack(res)
+        fails = verify(out, fmap, input_text)
+        acct.log_call(conn, product_id=row["id"], model=model_name, phase=phase, attempt=attempt,
+                      input_tokens=usage.get("input_tokens", 0),
+                      output_tokens=usage.get("output_tokens", 0), latency_ms=latency,
+                      status="enriched" if not fails else "verifier_failed",
+                      fail_reason=(fails[0] if fails else None), prompt_version=PROMPT_VERSION)
+        if not fails:
+            ok = True
+            break
+    ts = now_iso()
+    if ok:
+        content = {**out, "_meta": {"basis": f"generated:llm:{model_name}:prompt_{PROMPT_VERSION}", "at": ts}}
+        conn.execute("UPDATE products SET llm_content=?, llm_hash=?, llm_status='enriched', "
+                     "llm_enriched_at=? WHERE id=?", (json.dumps(content), h, ts, row["id"]))
+    else:
+        conn.execute("UPDATE products SET llm_hash=?, llm_status='enrich_failed', "
+                     "llm_enriched_at=? WHERE id=?", (h, ts, row["id"]))
+    conn.commit()
+    return "enriched" if ok else "failed"
+
+
+def run(conn: sqlite3.Connection, *, client, client_strong=None, model_name: str = "gemini-flash-latest",
+        budget_inr: float | None = None, limit: int = 100, phase: str = "realtime") -> dict:
+    """Sequential novelty-gated, budget-capped pass (used by tests + small runs).
+    The budget circuit-breaker reads REAL daily spend from the ledger."""
+    from . import llm_accounting as acct
+    rows = conn.execute(f"SELECT {_SELECT_COLS} FROM products WHERE {_NEEDS_ENRICH} "
+                        "ORDER BY id LIMIT ?", (f"{PROMPT_VERSION}:%", limit)).fetchall()
+    stats = {"scanned": len(rows), "enriched": 0, "failed": 0, "skipped_novelty": 0, "spend_inr": 0.0}
+    for row in rows:
+        if budget_inr is not None and acct.spend_since(conn, 1) >= budget_inr:
+            break
+        r = enrich_one(conn, row, client=client, client_strong=client_strong,
+                       model_name=model_name, phase=phase)
+        stats["enriched" if r == "enriched" else "failed" if r == "failed" else "skipped_novelty"] += 1
     stats["spend_inr"] = acct.spend_since(conn, 1)
     return stats
 
 
-def gemini_client(model: str = "gemini-2.5-flash"):
-    """Default live client (batch/realtime Gemini). Requires GEMINI_API_KEY.
-    Returns a callable(prompt, image_url) -> parsed JSON dict."""
+def drain_concurrent(db_path, *, model_name: str = "gemini-flash-latest", workers: int = 16,
+                     budget_inr: float | None = None, batch: int = 40, client_factory=None) -> dict:
+    """The production enrichment path: N threads, each a private connection +
+    client, partition products by id%workers (no claim contention), enrich until
+    dry or budget hit. Every call is on the ledger; watch spend live on /llm.
+    Fully resumable — a killed run just re-selects what's still un-enriched."""
+    import threading
+    from concurrent.futures import ThreadPoolExecutor
+
+    from . import db
+    from . import llm_accounting as acct
+    make_client = client_factory or (lambda: gemini_client(model_name))
+    stop = threading.Event()
+    totals = {"enriched": 0, "failed": 0}
+    lock = threading.Lock()
+
+    def worker(wid: int) -> None:
+        conn = db.connect(str(db_path), check_same_thread=False)
+        client = make_client()
+        try:
+            while not stop.is_set():
+                if budget_inr is not None and acct.spend_since(conn, 1) >= budget_inr:
+                    stop.set(); break
+                rows = conn.execute(
+                    f"SELECT {_SELECT_COLS} FROM products WHERE ({_NEEDS_ENRICH}) "
+                    "AND (id % ?) = ? ORDER BY id LIMIT ?",
+                    (f"{PROMPT_VERSION}:%", workers, wid, batch)).fetchall()
+                if not rows:
+                    break
+                for row in rows:
+                    if stop.is_set():
+                        break
+                    r = enrich_one(conn, row, client=client, model_name=model_name)
+                    if r in ("enriched", "failed"):
+                        with lock:
+                            totals[r] += 1
+        finally:
+            conn.close()
+
+    with ThreadPoolExecutor(max_workers=workers) as pool:
+        for f in [pool.submit(worker, i) for i in range(workers)]:
+            f.result()
+    control = db.connect(str(db_path))
+    out = {**totals, "spend_inr": acct.spend_since(control, 1),
+           "remaining": control.execute(
+               f"SELECT COUNT(*) FROM products WHERE {_NEEDS_ENRICH}", (f"{PROMPT_VERSION}:%",)
+           ).fetchone()[0]}
+    control.close()
+    return out
+
+
+def gemini_client(model: str = "gemini-flash-latest"):
+    """Default live client (realtime Gemini). Requires GEMINI_API_KEY.
+    Auth via the x-goog-api-key header (works for both key formats).
+    Returns a callable(prompt, image_url) -> {output, usage}."""
     import os
 
     def _call(prompt: str, image_url: str | None) -> dict:
@@ -298,7 +354,8 @@ def gemini_client(model: str = "gemini-2.5-flash"):
         # (image bytes would be attached here for the vision path; omitted in v1
         #  realtime client — the batch pipeline attaches inline_data)
         r = requests.post(
-            f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent?key={key}",
+            f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent",
+            headers={"x-goog-api-key": key, "Content-Type": "application/json"},
             json={"contents": [{"parts": parts}],
                   "generationConfig": {"responseMimeType": "application/json"}},
             timeout=60)
@@ -322,18 +379,24 @@ def main(argv=None) -> int:
     from . import db
 
     ap = argparse.ArgumentParser(prog="mb-llm-enrich")
-    ap.add_argument("--limit", type=int, default=100)
+    ap.add_argument("--drain", action="store_true", help="concurrent full drain (production path)")
+    ap.add_argument("--workers", type=int, default=16)
+    ap.add_argument("--limit", type=int, default=100, help="sequential mode only")
     ap.add_argument("--budget-inr", type=float, default=500.0,
-                    help="hard daily spend cap (circuit breaker)")
-    ap.add_argument("--model", default="gemini-2.5-flash")
+                    help="hard daily spend cap (circuit breaker, reads real ledger spend)")
+    ap.add_argument("--model", default="gemini-flash-latest")
     ap.add_argument("--db", default=str(db.DEFAULT_DB_PATH))
     args = ap.parse_args(argv)
-    conn = db.connect(args.db)
-    db.migrate(conn)
-    stats = run(conn, client=gemini_client(args.model), model_name=args.model,
-                budget_inr=args.budget_inr, limit=args.limit)
+    db.migrate(db.connect(args.db))
+    if args.drain:
+        stats = drain_concurrent(args.db, model_name=args.model, workers=args.workers,
+                                 budget_inr=args.budget_inr)
+    else:
+        conn = db.connect(args.db)
+        stats = run(conn, client=gemini_client(args.model), model_name=args.model,
+                    budget_inr=args.budget_inr, limit=args.limit)
+        conn.close()
     print(json.dumps(stats), file=sys.stderr)
-    conn.close()
     return 0
 
 

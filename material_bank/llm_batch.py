@@ -137,17 +137,18 @@ class GeminiBatchTransport:
     fake transport; only this class's two methods touch the unverified wire shape.
     """
 
-    def __init__(self, model: str = "gemini-2.5-flash"):
+    def __init__(self, model: str = "gemini-flash-latest"):
         self.model = model
         self.base = "https://generativelanguage.googleapis.com/v1beta"
 
-    def _key(self):
-        return os.environ["GEMINI_API_KEY"]
+    def _headers(self):
+        return {"x-goog-api-key": os.environ["GEMINI_API_KEY"], "Content-Type": "application/json"}
 
     def submit(self, requests: list[dict]) -> str:
         from curl_cffi import requests as http
         inlined = [{"request": r["request"], "metadata": {"key": r["key"]}} for r in requests]
-        r = http.post(f"{self.base}/models/{self.model}:batchGenerateContent?key={self._key()}",
+        r = http.post(f"{self.base}/models/{self.model}:batchGenerateContent",
+                      headers=self._headers(),
                       json={"batch": {"display_name": "mb-enrich",
                                       "input_config": {"requests": {"requests": inlined}}}},
                       timeout=120)
@@ -158,7 +159,7 @@ class GeminiBatchTransport:
 
     def results(self, job_name: str) -> list[dict]:
         from curl_cffi import requests as http
-        r = http.get(f"{self.base}/{job_name}?key={self._key()}", timeout=60)
+        r = http.get(f"{self.base}/{job_name}", headers=self._headers(), timeout=60)
         op = r.json()
         if not op.get("done"):
             raise RuntimeError(f"batch {job_name} not done yet")

@@ -164,6 +164,27 @@ def test_run_escalates_then_marks_failed(conn):
     assert conn.execute("SELECT llm_status FROM products").fetchone()[0] == "enrich_failed"
 
 
+def test_drain_concurrent_enriches_all_and_is_resumable(tmp_path):
+    from material_bank.harvest.common import build_product
+    dbp = tmp_path / "c.db"
+    conn = db_mod.connect(dbp, check_same_thread=False)
+    db_mod.migrate(conn)
+    for i in range(6):
+        db_mod.upsert_product(conn, build_product(brand="B", sku=f"s{i}",
+            title="Emperador Marble Tile", category="tiles", source=f"u{i}",
+            image_url="https://i/x.jpg", size_mm="600x600"), supplier_domain="orientbell.com")
+    conn.commit(); conn.close()
+
+    factory = lambda: (lambda p, i: {"output": _good(), "usage": {"input_tokens": 100, "output_tokens": 50}})
+    out = le.drain_concurrent(dbp, workers=3, client_factory=factory)
+    assert out["enriched"] == 6 and out["remaining"] == 0 and out["spend_inr"] > 0
+    # resumable: a second drain finds nothing left
+    assert le.drain_concurrent(dbp, workers=3, client_factory=factory)["enriched"] == 0
+    c = db_mod.connect(dbp)
+    assert c.execute("SELECT COUNT(*) FROM llm_calls WHERE status='enriched'").fetchone()[0] == 6
+    c.close()
+
+
 def test_budget_circuit_breaker_stops_on_real_spend(conn):
     # add a 2nd product so the breaker can fire between them
     from material_bank.harvest.common import build_product
