@@ -175,45 +175,51 @@ def _sentences_ok(items, fmap, input_text, supplier_domain):
     return fails
 
 
+def _tag_ok(it, vocab, valid_ids, field_map) -> bool:
+    """A tag is kept iff it is in-vocab, cites valid ids, and is grounded in a
+    DISTINGUISHING source (the image or a non-generic field — not name/brand/cat)."""
+    if not isinstance(it, dict) or it.get("tag") not in vocab:
+        return False
+    srcs = it.get("sources") or []
+    if not srcs or any(s not in valid_ids for s in srcs):
+        return False
+    return "img1" in srcs or any(field_map.get(s, ("", ""))[0] not in _GENERIC_FIELDS
+                                 for s in srcs if s in field_map)
+
+
+def sanitize(output: dict, field_map: dict) -> dict:
+    """Drop what a strict verifier would reject but that shouldn't waste a whole
+    retry: ungrounded / out-of-vocab / excess tags, and out-of-vocab vision. An
+    ungrounded 'residential' tag is dropped, not a reason to re-bill a good
+    description. The description itself is NEVER touched here — it's hard-verified."""
+    if not isinstance(output, dict):
+        return output
+    valid_ids = set(field_map) | {"img1"}
+    o = dict(output)
+    for key, vocab in (("style_tags", STYLE_VOCAB), ("use_case_tags", USE_CASE_VOCAB)):
+        o[key] = [it for it in (o.get(key) or []) if _tag_ok(it, vocab, valid_ids, field_map)][:_MAX_TAGS]
+    v = dict(o.get("vision") or {})
+    ml = (v.get("material_look") or {}).get("value")
+    if ml and ml != "unknown" and ml not in MATERIAL_VOCAB:
+        v["material_look"] = {"value": "unknown", "confidence": 0.0}
+    o["vision"] = v
+    return o
+
+
 def verify(output: dict, field_map: dict, input_text: str) -> list[str]:
-    """Deterministic verification of one LLM output. [] == passes."""
+    """HARD verification — the checks that must trigger a retry: schema present,
+    and the DESCRIPTION honest (no fabrication/plumbing/restatement/bad cites).
+    Tag/vision hygiene is handled by ``sanitize`` (drop, don't retry). [] passes."""
     if not isinstance(output, dict):
         return ["not a JSON object"]
-    valid_ids = set(field_map) | {"img1"}
     supplier_domain = next((v for n, v in field_map.values() if n == "supplier_domain"), None)
-    fails: list[str] = []
-    for key in ("description", "style_tags", "use_case_tags", "vision"):
-        if key not in output:
-            fails.append(f"missing key {key}")
-    if fails:
-        return fails
+    if "description" not in output or "vision" not in output:
+        return ["missing description/vision"]
     if not isinstance(output["description"], list) or not output["description"]:
-        fails.append("description must be a non-empty list")
-    elif len(output["description"]) > 6:
-        fails.append("description too long (>6 sentences)")
-    else:
-        fails += _sentences_ok(output["description"], field_map, input_text, supplier_domain)
-    # (3) tag discipline: cap count; every tag must trace to a DISTINGUISHING
-    #     source (a non-generic field or the image), not just name/brand/category.
-    for key, vocab in (("style_tags", STYLE_VOCAB), ("use_case_tags", USE_CASE_VOCAB)):
-        tags = output.get(key) or []
-        if len(tags) > _MAX_TAGS:
-            fails.append(f"{key}: too many ({len(tags)} > {_MAX_TAGS})")
-        for it in tags:
-            if not isinstance(it, dict) or it.get("tag") not in vocab:
-                fails.append(f"{key}: out-of-vocab {it.get('tag') if isinstance(it, dict) else it!r}")
-                continue
-            srcs = it.get("sources") or []
-            if not srcs or any(s not in valid_ids for s in srcs):
-                fails.append(f"{key}: bad source cite for {it.get('tag')!r}")
-            elif not ("img1" in srcs or any(field_map.get(s, ("", ""))[0] not in _GENERIC_FIELDS
-                                            for s in srcs if s in field_map)):
-                fails.append(f"{key}: {it['tag']!r} not grounded in a distinguishing attribute")
-    v = output.get("vision") or {}
-    ml = ((v.get("material_look") or {}).get("value"))
-    if ml and ml != "unknown" and ml not in MATERIAL_VOCAB:
-        fails.append(f"vision.material_look out-of-vocab: {ml!r}")
-    return fails
+        return ["description must be a non-empty list"]
+    if len(output["description"]) > 6:
+        return ["description too long (>6 sentences)"]
+    return _sentences_ok(output["description"], field_map, input_text, supplier_domain)
 
 
 def _unpack(res):
@@ -292,7 +298,8 @@ def _attempt_calls(client, input_text, image_url, fmap, model_name, phase, *, ma
             continue
         latency = int((time.monotonic() - t0) * 1000)
         o, usage = _unpack(res)
-        fails = verify(o, fmap, input_text)
+        o = sanitize(o, fmap)                          # drop bad tags (no retry for those)
+        fails = verify(o, fmap, input_text)            # hard checks only -> retry
         logs.append({"model": model_name, "phase": phase, "attempt": attempt,
                      "input_tokens": usage.get("input_tokens", 0),
                      "output_tokens": usage.get("output_tokens", 0), "latency_ms": latency,

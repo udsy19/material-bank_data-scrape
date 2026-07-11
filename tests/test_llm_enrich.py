@@ -79,9 +79,10 @@ def test_visual_colour_and_shape_claims_are_allowed_img_only():
         assert le.verify(o, FMAP, INPUT) == [], text
 
 
-def test_out_of_vocab_tag_fails():
+def test_out_of_vocab_tag_is_dropped_not_failed():
     o = _good(); o["style_tags"] = [{"tag": "steampunk", "sources": ["img1"]}]
-    assert any("out-of-vocab" in f for f in le.verify(o, FMAP, INPUT))
+    s = le.sanitize(o, FMAP)
+    assert s["style_tags"] == [] and le.verify(s, FMAP, INPUT) == []   # dropped, no retry
 
 
 # ── v3: usefulness checks (restatement, plumbing, tag discipline) ─────────────
@@ -101,22 +102,31 @@ def test_plumbing_in_prose_rejected():
         assert any("plumbing" in f or "citation id" in f for f in fails), bad
 
 
-def test_too_many_tags_rejected():
+def test_sanitize_caps_and_drops_bad_tags_without_failing_verify():
+    # 4 use-case tags (>3) + an ungrounded one + an out-of-vocab one — all handled
+    # by sanitize (dropped), NOT by a full retry.
     o = _good()
-    o["use_case_tags"] = [{"tag": t, "sources": ["img1"]} for t in
-                          ("residential", "commercial", "hospitality", "office")]  # 4 > 3
-    assert any("too many" in f for f in le.verify(o, FMAP, INPUT))
+    o["use_case_tags"] = ([{"tag": t, "sources": ["img1"]} for t in
+                           ("residential", "commercial", "hospitality", "office")]
+                          + [{"tag": "flooring", "sources": ["f2"]}])   # f2=category_std (generic)
+    o["style_tags"] = [{"tag": "steampunk", "sources": ["img1"]}]        # out-of-vocab
+    s = le.sanitize(o, FMAP)
+    assert len(s["use_case_tags"]) <= 3                                   # capped
+    assert all(t["sources"] != ["f2"] for t in s["use_case_tags"])       # ungrounded dropped
+    assert s["style_tags"] == []                                         # out-of-vocab dropped
+    assert le.verify(s, FMAP, INPUT) == []                               # description still passes -> no retry
 
 
-def test_tag_grounded_only_in_generic_field_rejected():
-    o = _good()
-    o["use_case_tags"] = [{"tag": "flooring", "sources": ["f2"]}]  # f2 = category_std (generic)
-    assert any("distinguishing" in f for f in le.verify(o, FMAP, INPUT))
+def test_sanitize_nulls_out_of_vocab_vision():
+    o = _good(); o["vision"] = {"material_look": {"value": "Marble Look", "confidence": 0.9}}
+    s = le.sanitize(o, FMAP)
+    assert s["vision"]["material_look"]["value"] == "unknown"
+    assert le.verify(s, FMAP, INPUT) == []
 
 
-def test_empty_style_tags_is_fine():
-    o = _good(); o["style_tags"] = []
-    assert le.verify(o, FMAP, INPUT) == []
+def test_description_fabrication_still_hard_fails(unused=None):
+    o = _good(); o["description"] = [{"text": "Certified to ISO 13006.", "sources": ["f1"]}]
+    assert le.verify(le.sanitize(o, FMAP), FMAP, INPUT)                   # still triggers retry
 
 
 def test_novelty_hash_is_version_prefixed():
