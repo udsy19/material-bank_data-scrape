@@ -67,14 +67,21 @@ def _select(conn: sqlite3.Connection, limit: int):
 
 
 def submit_batch(conn: sqlite3.Connection, *, transport, limit: int = 5000,
-                 prepare=_prep_image, model_name: str = "gemini-flash-latest") -> dict:
-    """Build requests for novelty-gated products and submit ONE batch job. Records
+                 prepare=_prep_image, model_name: str = "gemini-flash-latest",
+                 workers: int = 24) -> dict:
+    """Build requests for novelty-gated products and submit ONE batch job. Image
+    prep (fetch+resize) runs across ``workers`` threads — it's the long pole. Records
     the job in llm_batch_jobs (first-class, resumable) and marks its products
     'batched' (version-stamped) so a resubmit never duplicates them."""
     rows = _select(conn, limit)
     if not rows:
         return {"job_name": None, "count": 0}
-    requests = [build_batch_request(r, prepare=prepare) for r in rows]
+    if workers > 1:
+        from concurrent.futures import ThreadPoolExecutor
+        with ThreadPoolExecutor(max_workers=workers) as pool:
+            requests = list(pool.map(lambda r: build_batch_request(r, prepare=prepare), rows))
+    else:
+        requests = [build_batch_request(r, prepare=prepare) for r in rows]
     job_name = transport.submit(requests)
     ts = now_iso()
     conn.execute("INSERT INTO llm_batch_jobs (job_name, model, prompt_version, "
@@ -89,13 +96,15 @@ def submit_batch(conn: sqlite3.Connection, *, transport, limit: int = 5000,
 
 def submit_all(conn: sqlite3.Connection, *, transport, chunk: int = 5000,
                max_products: int | None = None, prepare=_prep_image,
-               model_name: str = "gemini-flash-latest") -> dict:
-    """Submit the whole un-enriched catalog as chunked batch jobs. Resumable —
-    already-batched products are skipped, so a re-run only submits the remainder."""
+               model_name: str = "gemini-flash-latest", workers: int = 24) -> dict:
+    """Submit the whole un-enriched catalog as chunked batch jobs (parallel image
+    prep). Resumable — already-batched products are skipped, so a re-run only
+    submits the remainder."""
     jobs, total = [], 0
     while max_products is None or total < max_products:
         n = chunk if max_products is None else min(chunk, max_products - total)
-        out = submit_batch(conn, transport=transport, limit=n, prepare=prepare, model_name=model_name)
+        out = submit_batch(conn, transport=transport, limit=n, prepare=prepare,
+                           model_name=model_name, workers=workers)
         if not out["count"]:
             break
         jobs.append(out["job_name"]); total += out["count"]
@@ -247,6 +256,7 @@ def main(argv=None) -> int:
     ap.add_argument("--submit", action="store_true", help="submit one chunk")
     ap.add_argument("--collect", action="store_true", help="poll + ingest all finished jobs")
     ap.add_argument("--chunk", type=int, default=5000)
+    ap.add_argument("--workers", type=int, default=24, help="parallel image-prep threads")
     ap.add_argument("--max", type=int, default=None, help="cap products for --submit-all")
     ap.add_argument("--model", default="gemini-flash-latest")
     ap.add_argument("--db", default=str(db.DEFAULT_DB_PATH))
@@ -256,7 +266,7 @@ def main(argv=None) -> int:
     transport = GeminiBatchTransport(args.model)
     if args.submit_all:
         out = submit_all(conn, transport=transport, chunk=args.chunk, max_products=args.max,
-                         model_name=args.model)
+                         model_name=args.model, workers=args.workers)
     elif args.submit:
         out = submit_batch(conn, transport=transport, limit=args.chunk, model_name=args.model)
     elif args.collect:

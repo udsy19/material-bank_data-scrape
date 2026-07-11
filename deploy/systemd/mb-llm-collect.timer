@@ -1,0 +1,10 @@
+[Unit]
+Description=Material Bank — poll + ingest LLM batch jobs every 5 minutes
+
+[Timer]
+OnBootSec=3min
+OnUnitInactiveSec=5min
+Persistent=true
+
+[Install]
+WantedBy=timers.target
