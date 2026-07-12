@@ -22,15 +22,23 @@ MAX_DIM = 384
 _CACHE = Path(__file__).resolve().parent.parent / "data" / "img_cache"
 
 
-def _default_fetch(url: str) -> bytes | None:
-    try:
-        from curl_cffi import requests
-        r = requests.get(url, impersonate="chrome131", timeout=20)
-        if r.status_code and 200 <= r.status_code < 300 and r.content:
-            return r.content
-    except Exception:
-        pass
-    return None
+def make_fetch(timeout: float = 20.0):
+    """Fetch closure with a chosen timeout. Enrichment keeps the patient 20s
+    default; the serving path (dashboard image proxy) passes a short one so a
+    dead origin can't pin a browser image lane for 20s on first encounter."""
+    def _fetch(url: str) -> bytes | None:
+        try:
+            from curl_cffi import requests
+            r = requests.get(url, impersonate="chrome131", timeout=timeout)
+            if r.status_code and 200 <= r.status_code < 300 and r.content:
+                return r.content
+        except Exception:
+            pass
+        return None
+    return _fetch
+
+
+_default_fetch = make_fetch()
 
 
 def _resize(raw: bytes) -> bytes | None:

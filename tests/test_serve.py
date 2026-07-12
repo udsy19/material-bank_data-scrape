@@ -278,3 +278,40 @@ def test_taxonomy_endpoint_and_family_filter(client):
     # filter products by canonical family
     d = client.get("/api/products", params={"family": "Surfaces"}).json()
     assert d["total"] == 1 and d["items"][0]["family"] == "Surfaces"
+
+
+
+def test_match_prewarms_result_thumbnails(tmp_path):
+    """A search fires thumbnail warming for every result image_url, so cold
+    below-the-fold cards are already cached when they scroll into view."""
+    import time
+
+    conn = db_mod.connect(tmp_path / "warm.db", check_same_thread=False)
+    db_mod.migrate(conn)
+    store = NumpyVectorStore(conn)
+    emb = FakeEmbedder()
+    p = build_product(brand="Obeetee", sku="9", title="Handwoven Jute Rug",
+                      category="rugs", source="t", image_url="https://img/warm.jpg")
+    pid = db_mod.upsert_product(conn, p, supplier_domain="obeetee.com")
+    db_mod.add_price_observation(conn, pid, PriceObservation(
+        source="obeetee.com", price_inr=69300, basis=PriceBasis.LISTED_MRP,
+        observed_at=db_mod.now_iso(), source_url="u"))
+    store.upsert(pid, "text", emb.encode_text(["Handwoven Jute Rug"])[0], emb.model_id)
+
+    warmed: list[str] = []
+
+    def _recording_prepare(url):
+        warmed.append(url)
+        return _jpeg()
+
+    app = create_app(lambda: {"conn": conn, "store": store, "embedder": emb,
+                              "prepare_image": _recording_prepare})
+    tc = TestClient(app)
+    r = tc.get("/api/match", params={"q": "jute rug", "k": 5})
+    assert r.status_code == 200 and r.json()["count"] >= 1
+
+    deadline = time.time() + 5
+    while time.time() < deadline and "https://img/warm.jpg" not in warmed:
+        time.sleep(0.05)
+    assert "https://img/warm.jpg" in warmed
+    conn.close()

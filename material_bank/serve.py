@@ -7,6 +7,7 @@ marqo embedder and the numpy vector index over catalog.db.
 from __future__ import annotations
 
 import threading
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 import numpy as np
@@ -28,6 +29,30 @@ from .vectorstore import NumpyVectorStore
 
 _STATIC = Path(__file__).resolve().parent / "static"
 _ALLOWED_IMAGE_HOSTS = None  # None = allow any http(s); tighten if needed
+
+
+def _warm_one(prepare, url: str, inflight: set) -> None:
+    try:
+        prepare(url)
+    except Exception:
+        pass
+    finally:
+        inflight.discard(url)
+
+
+def _prewarm_images(s: dict, urls: list[str]) -> None:
+    """Fire-and-forget thumbnail warming for a result page. The browser lazy-loads
+    only on-screen cards, so a cold query used to pay the origin fetch per card as
+    it scrolled into view; warming every result the moment the query returns means
+    the disk cache is already filled by the time a card is looked at."""
+    pool = s.setdefault(
+        "_img_pool", ThreadPoolExecutor(max_workers=8, thread_name_prefix="img-warm"))
+    inflight: set = s.setdefault("_img_inflight", set())
+    prepare = s["prepare_image"]
+    for url in dict.fromkeys(u for u in urls if u):
+        if url not in inflight:
+            inflight.add(url)
+            pool.submit(_warm_one, prepare, url, inflight)
 
 
 def create_app(state_provider) -> FastAPI:
@@ -79,6 +104,7 @@ def create_app(state_provider) -> FastAPI:
             return {"query": q, "count": 0, "results": []}
         with lock:
             results = hybrid_search(s["conn"], s["embedder"], s["store"], q, k=k)
+        _prewarm_images(s, [r.get("image_url") for r in results])
         return {"query": q, "count": len(results), "results": results}
 
     @app.get("/api/products")
@@ -306,6 +332,8 @@ def create_app(state_provider) -> FastAPI:
 
 
 def default_state_provider() -> dict:
+    import functools
+
     from . import image_prep
     from .embeddings import MarqoEmbedder
 
@@ -316,8 +344,11 @@ def default_state_provider() -> dict:
     store.preload("image")
     embedder = MarqoEmbedder()
     embedder.encode_text(["warmup"])  # load model weights before first request
+    # Serving uses a short fetch timeout: a dead/slow origin fails fast (and gets
+    # its .miss memo) instead of pinning a dashboard image lane for 20s.
     return {"conn": conn, "store": store, "embedder": embedder,
-            "prepare_image": image_prep.prepare_image}
+            "prepare_image": functools.partial(
+                image_prep.prepare_image, fetch=image_prep.make_fetch(6.0))}
 
 
 app = create_app(default_state_provider)
