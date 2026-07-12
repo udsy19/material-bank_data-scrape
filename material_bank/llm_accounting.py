@@ -63,6 +63,25 @@ def spend_since(conn: sqlite3.Connection, days: float) -> float:
     return round(r[0], 4)
 
 
+def spend_total(conn: sqlite3.Connection) -> float:
+    """All-time ledger spend (₹). The basis for the hard budget cap in advance()."""
+    return round(conn.execute("SELECT COALESCE(SUM(cost_inr),0) FROM llm_calls").fetchone()[0], 4)
+
+
+def reconcile(conn: sqlite3.Connection, external_inr: float, *, tolerance: float = 0.10) -> dict:
+    """Reconcile the self-reported ledger against the Google Cloud billing console —
+    the external truth. The ledger was once internally consistent and 14x wrong
+    (uncounted thinking tokens), the signature failure of self-reported accounting;
+    this is the check that would have caught it. ``external_inr`` is read from the
+    billing console (compare same-day-yesterday — billing data lags a few hours).
+    ``halt`` fires when divergence exceeds tolerance: the operator (or the timer
+    wrapper) must stop the drain and find the gap before spending more."""
+    ledger = spend_total(conn)
+    div = abs(ledger - external_inr) / external_inr if external_inr else (1.0 if ledger else 0.0)
+    return {"ledger_inr": ledger, "external_inr": round(external_inr, 2),
+            "divergence": round(div, 3), "tolerance": tolerance, "halt": div > tolerance}
+
+
 def llm_report(conn: sqlite3.Connection, *, days: int = 30) -> dict:
     """The LLM-ops cockpit: spend (today / window / all-time), per-model and
     per-status breakdowns, verifier pass-rate, and a daily spend series."""
@@ -125,8 +144,9 @@ def main(argv=None) -> int:
     p("LLM SPEND  today ₹%.2f | 30d ₹%.2f | all-time ₹%.2f (%d calls, %d in + %d out tokens)"
       % (rep["spend_today_inr"], rep["spend_window_inr"], at["cost_inr"], at["calls"],
          at["input_tokens"], at["output_tokens"]))
-    p("verifier pass-rate: %s   (rate: $%s/$%s per 1M in/out, ₹%.0f/$)"
-      % (rep["verifier_pass_rate"], *PRICING.get("gemini-2.5-flash"), USD_INR))
+    from .llm_enrich import MODEL
+    p("verifier pass-rate: %s   (%s: $%s/$%s per 1M in/out, ₹%.0f/$)"
+      % (rep["verifier_pass_rate"], MODEL, *PRICING.get(MODEL, _DEFAULT_RATE), USD_INR))
     p("by status:", {k: f"{v['calls']} (₹{v['cost_inr']:.2f})" for k, v in rep["by_status"].items()})
     for m in rep["by_model"]:
         p("  model %-22s %5d calls  ₹%.2f" % (m["model"], m["calls"], m["cost_inr"]))

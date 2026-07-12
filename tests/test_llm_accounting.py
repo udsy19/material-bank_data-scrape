@@ -59,3 +59,21 @@ def test_recent_calls_lists_every_call_newest_first(conn):
     assert out["items"][0]["id"] > out["items"][1]["id"]     # newest first
     only_err = acct.recent_calls(conn, status="api_error")
     assert only_err["total"] == 0
+
+
+def test_reconcile_flags_divergence(tmp_path):
+    """External-truth check: ledger vs Google billing. >10% gap must halt — the
+    check that would have caught the 14x thinking-token undercount."""
+    from material_bank import db as db_mod
+    from material_bank import llm_accounting as acct
+    c = db_mod.connect(tmp_path / "c.db"); db_mod.migrate(c)
+    acct.log_call(c, product_id=None, model="gemini-flash-latest", phase="batch", attempt=0,
+                  input_tokens=1_000_000, output_tokens=1_000_000, status="enriched", batch=True)
+    c.commit()
+    ledger = acct.spend_total(c)
+    # in tolerance -> no halt
+    near = acct.reconcile(c, ledger * 1.05)
+    assert near["halt"] is False
+    # 14x off (the incident) -> halt
+    far = acct.reconcile(c, ledger * 14)
+    assert far["halt"] is True and far["divergence"] > 0.9

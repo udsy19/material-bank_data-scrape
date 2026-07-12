@@ -141,6 +141,27 @@ def test_advance_survives_any_submit_rejection(conn, err):
     assert conn.execute("SELECT COUNT(*) FROM llm_batch_jobs").fetchone()[0] == 1
 
 
+def test_advance_halts_at_budget_cap(conn):
+    """The hard ₹ cap must stop submission (the enforcement layer we own), while
+    collection still runs so in-flight work is never stranded."""
+    from material_bank import llm_accounting as acct
+    ids = [r[0] for r in conn.execute("SELECT id FROM products ORDER BY id")]
+    # pre-load the ledger so we're already over the cap
+    acct.log_call(conn, product_id=ids[0], model="gemini-flash-latest", phase="batch",
+                  attempt=0, input_tokens=10_000_000, output_tokens=10_000_000, status="enriched",
+                  batch=True)
+    conn.commit()
+    over = acct.spend_total(conn)
+    assert over > 100
+
+    class OpenT:
+        def submit(self, reqs): raise AssertionError("must not submit past the budget cap")
+        def results(self, job): raise RuntimeError("not done")
+    out = lb.advance(conn, transport=OpenT(), chunk=1, prepare=lambda u: None, budget_inr=over - 1)
+    assert out["budget_halted"] is True and out["jobs_submitted"] == 0
+    assert "budget cap" in out["submit_error"]
+
+
 def test_advance_drains_until_exhausted(conn):
     """With no quota limit, advance keeps submitting until the catalog is empty."""
     class OpenT:

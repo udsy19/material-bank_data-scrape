@@ -28,6 +28,7 @@ import sqlite3
 from .db import now_iso
 from .llm_enrich import (
     GEN_CONFIG,
+    MODEL,
     PROMPT_VERSION,
     _INPUT_FIELDS,
     build_prompt,
@@ -69,7 +70,7 @@ def _select(conn: sqlite3.Connection, limit: int):
 
 
 def submit_batch(conn: sqlite3.Connection, *, transport, limit: int = 5000,
-                 prepare=_prep_image, model_name: str = "gemini-flash-latest",
+                 prepare=_prep_image, model_name: str = MODEL,
                  workers: int = 24) -> dict:
     """Build requests for novelty-gated products and submit ONE batch job. Image
     prep (fetch+resize) runs across ``workers`` threads — it's the long pole. Records
@@ -98,7 +99,7 @@ def submit_batch(conn: sqlite3.Connection, *, transport, limit: int = 5000,
 
 def submit_all(conn: sqlite3.Connection, *, transport, chunk: int = 5000,
                max_products: int | None = None, prepare=_prep_image,
-               model_name: str = "gemini-flash-latest", workers: int = 24) -> dict:
+               model_name: str = MODEL, workers: int = 24) -> dict:
     """Submit the whole un-enriched catalog as chunked batch jobs (parallel image
     prep). Resumable — already-batched products are skipped, so a re-run only
     submits the remainder."""
@@ -114,8 +115,9 @@ def submit_all(conn: sqlite3.Connection, *, transport, chunk: int = 5000,
 
 
 def advance(conn: sqlite3.Connection, *, transport, chunk: int = 1000,
-            prepare=_prep_image, model_name: str = "gemini-flash-latest",
-            workers: int = 24, max_submit_per_tick: int = 60) -> dict:
+            prepare=_prep_image, model_name: str = MODEL,
+            workers: int = 24, max_submit_per_tick: int = 60,
+            budget_inr: float | None = None) -> dict:
     """One autonomous tick of the batch flywheel, self-pacing against Gemini's
     batch *enqueued-token* quota:
 
@@ -127,10 +129,21 @@ def advance(conn: sqlite3.Connection, *, transport, chunk: int = 1000,
     ``submit_batch`` calls the wire ``submit()`` before it records/marks anything,
     so a 429'd chunk leaves state untouched and its rows stay eligible. Safe to
     run on a short timer until the whole catalog is enriched — no live process to
-    babysit, fully resumable."""
+    babysit, fully resumable.
+
+    ``budget_inr`` is a HARD cumulative-spend cap (the enforcement layer we own —
+    Google's budget *alerts* only notify). When all-time ledger spend reaches it,
+    submission halts; collection still runs so in-flight work is never stranded.
+    The ledger is only trustworthy as a cap once thinking tokens are counted
+    (see llm_enrich.usage_tokens) — the incident that made this cap necessary."""
+    from . import llm_accounting as acct
     ingest = collect_pending(conn, transport=transport, model_name=model_name)
-    submitted, submit_error = 0, None
+    submitted, submit_error, budget_halted = 0, None, False
     for _ in range(max_submit_per_tick):
+        if budget_inr is not None and acct.spend_total(conn) >= budget_inr:
+            budget_halted = True
+            submit_error = f"budget cap ₹{budget_inr:.0f} reached (ledger ₹{acct.spend_total(conn):.0f})"
+            break
         try:
             out = submit_batch(conn, transport=transport, limit=chunk, prepare=prepare,
                                model_name=model_name, workers=workers)
@@ -148,11 +161,11 @@ def advance(conn: sqlite3.Connection, *, transport, chunk: int = 1000,
         "SELECT COUNT(*) FROM products WHERE (llm_status IS NULL OR llm_status='stale' "
         "OR llm_hash NOT LIKE ?) AND title IS NOT NULL", (f"{PROMPT_VERSION}:%",)).fetchone()[0]
     return {**ingest, "jobs_submitted": submitted, "remaining_unbatched": remaining,
-            "submit_error": submit_error}
+            "submit_error": submit_error, "budget_halted": budget_halted}
 
 
 def collect_pending(conn: sqlite3.Connection, *, transport,
-                    model_name: str = "gemini-flash-latest") -> dict:
+                    model_name: str = MODEL) -> dict:
     """Poll every still-submitted job; ingest the finished ones (verify + write +
     ledger), mark them 'ingested'. Safe to run repeatedly on a timer until dry."""
     pending = conn.execute("SELECT job_name FROM llm_batch_jobs WHERE status='submitted'").fetchall()
@@ -178,7 +191,7 @@ class _Given:
 
 
 def collect_batch(conn: sqlite3.Connection, job_name: str, *, transport,
-                  model_name: str = "gemini-2.5-flash") -> dict:
+                  model_name: str = MODEL) -> dict:
     """Ingest a finished batch: verify each result, write llm_content (pass) or
     mark enrich_failed (reject). Re-serialises each product to verify against its
     own field map — the verifier is the same one the realtime path uses."""
@@ -242,7 +255,7 @@ class GeminiBatchTransport:
     fake transport; only this class's two methods touch the unverified wire shape.
     """
 
-    def __init__(self, model: str = "gemini-flash-latest"):
+    def __init__(self, model: str = MODEL):
         self.model = model
         self.base = "https://generativelanguage.googleapis.com/v1beta"
 
@@ -298,7 +311,9 @@ def main(argv=None) -> int:
     ap.add_argument("--chunk", type=int, default=5000)
     ap.add_argument("--workers", type=int, default=24, help="parallel image-prep threads")
     ap.add_argument("--max", type=int, default=None, help="cap products for --submit-all")
-    ap.add_argument("--model", default="gemini-flash-latest")
+    ap.add_argument("--budget-inr", type=float, default=None,
+                    help="hard cumulative ₹ spend cap for --advance (halts submission when reached)")
+    ap.add_argument("--model", default=MODEL)
     ap.add_argument("--db", default=str(db.DEFAULT_DB_PATH))
     args = ap.parse_args(argv)
     conn = db.connect(args.db)
@@ -311,7 +326,7 @@ def main(argv=None) -> int:
         out = submit_batch(conn, transport=transport, limit=args.chunk, model_name=args.model)
     elif args.advance:
         out = advance(conn, transport=transport, chunk=args.chunk, model_name=args.model,
-                      workers=args.workers)
+                      workers=args.workers, budget_inr=args.budget_inr)
     elif args.collect:
         out = collect_pending(conn, transport=transport, model_name=args.model)
     else:

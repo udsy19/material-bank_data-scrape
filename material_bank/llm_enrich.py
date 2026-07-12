@@ -24,6 +24,15 @@ from .db import now_iso
 
 PROMPT_VERSION = "v4"
 
+# The ONE place the Gemini model is chosen (pin chokepoint). This is a FLOATING
+# ALIAS: Google can repoint `gemini-flash-latest` to a newer, several-times-pricier
+# generation with zero change here — silently repeating the thinking-token cost
+# incident, but next time with no local diff to even diagnose. Before any at-scale
+# resume, resolve this alias to its concrete versioned snapshot (`models.get`) and
+# pin that exact string here; treat a model change as a deliberate, re-evaluated
+# decision, not a default. Everything (harvest, batch, eval, pricing) reads this.
+MODEL = "gemini-flash-latest"
+
 # words that don't count as "new information" when checking for restatement filler
 _STOPWORDS = {
     "a", "an", "the", "is", "are", "it", "its", "this", "that", "of", "for",
@@ -311,7 +320,7 @@ def _prepare_default(url):
     return image_prep.prepare_image(url) if url else None
 
 
-def enrich_one(conn, row, *, client, client_strong=None, model_name: str = "gemini-flash-latest",
+def enrich_one(conn, row, *, client, client_strong=None, model_name: str = MODEL,
                phase: str = "realtime", prepare=_prepare_default) -> str:
     """Enrich one product: prepare the image -> call -> verify (feedback-retry) ->
     log every attempt -> write. Returns 'enriched' | 'failed' | 'skipped'."""
@@ -338,7 +347,7 @@ def enrich_one(conn, row, *, client, client_strong=None, model_name: str = "gemi
     return "enriched" if ok else "failed"
 
 
-def run(conn: sqlite3.Connection, *, client, client_strong=None, model_name: str = "gemini-flash-latest",
+def run(conn: sqlite3.Connection, *, client, client_strong=None, model_name: str = MODEL,
         budget_inr: float | None = None, limit: int = 100, phase: str = "realtime",
         prepare=_prepare_default) -> dict:
     """Sequential novelty-gated, budget-capped pass (used by tests + small runs).
@@ -394,7 +403,7 @@ def _attempt_calls(client, input_text, image, fmap, model_name, phase, *, max_at
     return out, ok, logs
 
 
-def drain_concurrent(db_path, *, model_name: str = "gemini-flash-latest", workers: int = 16,
+def drain_concurrent(db_path, *, model_name: str = MODEL, workers: int = 16,
                      budget_inr: float | None = None, batch: int | None = None,
                      client_factory=None, prepare=_prepare_default) -> dict:
     """The production enrichment path. Image-prep + Gemini calls run concurrently
@@ -466,7 +475,7 @@ def usage_tokens(um: dict) -> dict:
             "output_tokens": um.get("candidatesTokenCount", 0) + um.get("thoughtsTokenCount", 0)}
 
 
-def gemini_client(model: str = "gemini-flash-latest"):
+def gemini_client(model: str = MODEL):
     """Default live client (realtime Gemini). Requires GEMINI_API_KEY.
     Auth via the x-goog-api-key header (works for both key formats).
     Returns a callable(prompt, image_url) -> {output, usage}."""
@@ -515,7 +524,7 @@ def main(argv=None) -> int:
     ap.add_argument("--limit", type=int, default=100, help="sequential mode only")
     ap.add_argument("--budget-inr", type=float, default=500.0,
                     help="hard daily spend cap (circuit breaker, reads real ledger spend)")
-    ap.add_argument("--model", default="gemini-flash-latest")
+    ap.add_argument("--model", default=MODEL)
     ap.add_argument("--db", default=str(db.DEFAULT_DB_PATH))
     args = ap.parse_args(argv)
     db.migrate(db.connect(args.db))

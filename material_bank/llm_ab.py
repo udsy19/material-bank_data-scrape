@@ -23,9 +23,9 @@ import time
 from . import db, image_colour, image_prep
 from . import llm_accounting as acct
 from .llm_batch import GeminiBatchTransport, build_batch_request
-from .llm_enrich import _INPUT_FIELDS, extract_json, sanitize, serialise, verify
+from .llm_enrich import MODEL, _INPUT_FIELDS, extract_json, sanitize, serialise, verify
 
-FLASH = "gemini-flash-latest"
+FLASH = MODEL                                # the pinned production model
 LITE = "gemini-flash-lite-latest"
 
 _COLOUR_FAMILY = {
