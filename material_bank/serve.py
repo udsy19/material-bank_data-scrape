@@ -269,15 +269,17 @@ def create_app(state_provider) -> FastAPI:
 
     @app.get("/api/image")
     def api_image(url: str = Query(...)) -> Response:
-        # NB: no DB lock here — image fetches are network-bound and must run
-        # concurrently, or 20+ cards load one-at-a-time.
+        # Served through image_prep: a content-addressed disk cache of ≤384px JPEGs
+        # (shared with enrichment). Cache hit = a ~1ms disk read; miss = fetch+resize
+        # +cache once; dead URLs are memoized so they fail fast instead of re-timing
+        # out every page load. No DB lock — reads run fully concurrent across cards.
         if not url.startswith(("http://", "https://")):
             raise HTTPException(400, "bad url")
-        content, ctype = S()["fetch_image"](url)
-        if not content:
+        jpeg = S()["prepare_image"](url)
+        if not jpeg:
             raise HTTPException(404, "image unavailable")
-        return Response(content=content, media_type=ctype or "image/jpeg",
-                        headers={"Cache-Control": "public, max-age=86400"})
+        return Response(content=jpeg, media_type="image/jpeg",
+                        headers={"Cache-Control": "public, max-age=604800"})
 
     def _similar(s: dict, pid: int) -> list[dict]:
         store: NumpyVectorStore = s["store"]
@@ -303,20 +305,8 @@ def create_app(state_provider) -> FastAPI:
     return app
 
 
-def _live_fetch_image(url: str) -> tuple[bytes | None, str | None]:
-    """Per-call curl_cffi GET — independent handle per request, thread-safe,
-    so many card images load concurrently."""
-    try:
-        from curl_cffi import requests
-        r = requests.get(url, impersonate="chrome131", timeout=15, allow_redirects=True)
-        if r.status_code and 200 <= r.status_code < 300 and r.content:
-            return r.content, r.headers.get("content-type", "image/jpeg")
-    except Exception:
-        pass
-    return None, None
-
-
 def default_state_provider() -> dict:
+    from . import image_prep
     from .embeddings import MarqoEmbedder
 
     conn = db.connect(check_same_thread=False)
@@ -327,7 +317,7 @@ def default_state_provider() -> dict:
     embedder = MarqoEmbedder()
     embedder.encode_text(["warmup"])  # load model weights before first request
     return {"conn": conn, "store": store, "embedder": embedder,
-            "fetch_image": _live_fetch_image}
+            "prepare_image": image_prep.prepare_image}
 
 
 app = create_app(default_state_provider)

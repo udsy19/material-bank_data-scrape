@@ -12,12 +12,12 @@ from material_bank.serve import create_app
 from material_bank.vectorstore import NumpyVectorStore
 
 
-def _png():
-    b = io.BytesIO(); Image.new("RGB", (4, 4), (200, 100, 60)).save(b, "PNG"); return b.getvalue()
+def _jpeg():
+    b = io.BytesIO(); Image.new("RGB", (4, 4), (200, 100, 60)).save(b, "JPEG"); return b.getvalue()
 
 
-def _fake_fetch_image(url):
-    return _png(), "image/png"
+def _fake_prepare_image(url):
+    return _jpeg()
 
 
 @pytest.fixture()
@@ -39,7 +39,7 @@ def client(tmp_path):
         store.upsert(pid, "text", emb.encode_text([title])[0], emb.model_id)
 
     app = create_app(lambda: {"conn": conn, "store": store, "embedder": emb,
-                              "fetch_image": _fake_fetch_image})
+                              "prepare_image": _fake_prepare_image})
     tc = TestClient(app)
     tc.conn = conn   # exposed so tests can score/mutate directly
     yield tc
@@ -87,8 +87,9 @@ def test_product_404(client):
 
 def test_image_proxy(client):
     r = client.get("/api/image", params={"url": "https://img/x.jpg"})
-    assert r.status_code == 200 and r.headers["content-type"] == "image/png"
-    assert r.content[:4] == b"\x89PNG"
+    assert r.status_code == 200 and r.headers["content-type"] == "image/jpeg"
+    assert r.content[:2] == b"\xff\xd8"          # served from image_prep as JPEG
+    assert "max-age" in r.headers.get("cache-control", "")
 
 
 def test_image_proxy_rejects_bad_url(client):
