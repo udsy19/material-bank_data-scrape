@@ -23,7 +23,15 @@ import time
 from . import db, image_colour, image_prep
 from . import llm_accounting as acct
 from .llm_batch import GeminiBatchTransport, build_batch_request
-from .llm_enrich import MODEL, _INPUT_FIELDS, extract_json, sanitize, serialise, verify
+from .llm_enrich import (
+    MODEL,
+    PROMPT_VERSION,
+    _INPUT_FIELDS,
+    extract_json,
+    sanitize,
+    serialise,
+    verify,
+)
 
 FLASH = MODEL                                # the pinned production model
 LITE = "gemini-flash-lite-latest"
@@ -155,6 +163,65 @@ def run_ab(db_path, *, n=600, out_dir="reports", seed=13) -> dict:
     return rep
 
 
+def run_canary(db_path, *, model=MODEL, n=400, prepare=None,
+               transport_factory=GeminiBatchTransport, value_sorted=True) -> dict:
+    """Re-canary the PRODUCTION config (batch path, thinking-off) on ``model`` before
+    resuming the drain. This validates a genuinely NEW, untested configuration:
+    Flash-thinking-off. The A/B's 0.64 keyword grounding was Flash-thinking-ON, a
+    config that no longer exists; Flash-Lite's 0.48 was its natural (no-think) mode.
+    Flash-thinking-off sits between them — expected to hold (structured extraction
+    with the image rarely needs chain-of-thought), but unmeasured. ``model`` is a
+    parameter precisely so a ~$1 Flash-Lite arm can be bolted on for one run if
+    grounding slides toward Lite territory, reviving its $28 finish as a live option.
+
+    Emits five signals:
+      pass_rate          — first-pass verifier survival (target ≈ the A/B's 0.98)
+      keyword_grounding  — search-keyword overlap with the product's own terms (≈0.64)
+      thinking_tokens_max— proof thinkingBudget=0 is honored (MUST be 0)
+      retry_rate         — first-pass verifier-fail fraction: in the one-shot batch
+                           drain this is paid-but-no-product WASTE, and equals the
+                           retry-trigger rate if a retry policy were added (each a $)
+      inr_per_product    — MEASURED ₹/product, the reconciliation seed for step 4
+
+    Runs through the batch path (what the drain uses). Logs each call to the ledger
+    (phase='canary') so the spend is captured for reconcile(); products are NOT
+    mutated — pure eval, they re-enrich in the real drain (trivial re-cost)."""
+    from .llm_batch import _prep_image, _select
+    prepare = prepare or _prep_image
+    conn = db.connect(str(db_path)); db.migrate(conn)
+    if value_sorted:
+        rows = _select(conn, n)                                # value-first, un-enriched
+    else:
+        rows = conn.execute(f"SELECT id, {', '.join(_INPUT_FIELDS)}, image_url, llm_hash "
+                            "FROM products WHERE title IS NOT NULL ORDER BY id LIMIT ?", (n,)).fetchall()
+    if not rows:
+        return {"model": model, "n": 0, "note": "no un-enriched products to canary"}
+    rowmap = {str(r["id"]): r for r in rows}
+    reqs = [build_batch_request(r, prepare=prepare) for r in rows]
+    tp = transport_factory(model)
+    results = _wait(tp, tp.submit(reqs))
+    for res in results:                                        # ledger the spend (recon seed)
+        u = res.get("usage") or {}
+        acct.log_call(conn, product_id=res.get("key"), model=model, phase="canary", attempt=0,
+                      input_tokens=u.get("input_tokens", 0), output_tokens=u.get("output_tokens", 0),
+                      status="enriched" if res.get("text") else "api_error",
+                      batch=True, prompt_version=PROMPT_VERSION)
+    conn.commit()
+    m = _metrics(results, rowmap, model=model, pixel_cache={})
+    thinks = [(r.get("usage") or {}).get("thinking_tokens", 0) for r in results]
+    return {
+        "model": model, "n": m["n"],
+        "pass_rate": m["pass_rate"],
+        "keyword_grounding": m["keyword_overlap"],
+        "malformed_rate": m["malformed_rate"],
+        "thinking_tokens_max": max(thinks) if thinks else 0,
+        "retry_rate": round(1 - m["pass_rate"], 3),
+        "inr_per_product": m["avg_cost_per_product"],
+        "usd_per_product": round((m["avg_cost_per_product"] or 0) / acct.USD_INR, 6),
+        "canary_spend_inr": round(m["cost_inr"], 3),
+    }
+
+
 def _dump_blind_pairs(rep, rowmap, out_dir, seed):
     import pathlib
     fd, fl = rep[FLASH]["_descriptions"], rep[LITE]["_descriptions"]
@@ -175,10 +242,17 @@ def main(argv=None) -> int:
     import argparse
     import sys
     ap = argparse.ArgumentParser(prog="mb-llm-ab")
+    ap.add_argument("--canary", action="store_true",
+                    help="re-canary the production config (batch, thinking-off) on --model")
+    ap.add_argument("--model", default=MODEL, help="model to canary (e.g. gemini-flash-lite-latest for the $1 arm)")
     ap.add_argument("--n", type=int, default=600)
     ap.add_argument("--db", default=str(db.DEFAULT_DB_PATH))
     args = ap.parse_args(argv)
-    print(json.dumps(run_ab(args.db, n=args.n), indent=1), file=sys.stderr)
+    if args.canary:
+        out = run_canary(args.db, model=args.model, n=args.n)
+    else:
+        out = run_ab(args.db, n=args.n)
+    print(json.dumps(out, indent=1), file=sys.stderr)
     return 0
 
 

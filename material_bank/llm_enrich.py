@@ -470,9 +470,13 @@ GEN_CONFIG = {"responseMimeType": "application/json",
 def usage_tokens(um: dict) -> dict:
     """Billed token counts from a Gemini usageMetadata block. Thinking tokens bill at
     the OUTPUT rate but arrive in thoughtsTokenCount — NOT candidatesTokenCount — so
-    they must be folded into output or the ledger silently undercounts the real bill."""
+    they are folded into output_tokens (or the ledger silently undercounts the real
+    bill). thinking_tokens is also surfaced raw: it's the canary's proof that
+    thinkingBudget=0 is actually honored (must come back 0)."""
+    thoughts = um.get("thoughtsTokenCount", 0)
     return {"input_tokens": um.get("promptTokenCount", 0),
-            "output_tokens": um.get("candidatesTokenCount", 0) + um.get("thoughtsTokenCount", 0)}
+            "output_tokens": um.get("candidatesTokenCount", 0) + thoughts,
+            "thinking_tokens": thoughts}
 
 
 def gemini_client(model: str = MODEL):

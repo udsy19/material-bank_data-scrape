@@ -55,10 +55,11 @@ def test_usage_tokens_folds_thinking_into_output():
     u = usage_tokens({"promptTokenCount": 1800, "candidatesTokenCount": 450,
                       "thoughtsTokenCount": 9800})
     assert u["input_tokens"] == 1800
-    assert u["output_tokens"] == 450 + 9800               # visible answer + thinking
-    # absent thoughts field → no crash, just the visible answer
-    assert usage_tokens({"promptTokenCount": 10, "candidatesTokenCount": 5}) == \
-        {"input_tokens": 10, "output_tokens": 5}
+    assert u["output_tokens"] == 450 + 9800               # visible answer + thinking (billed)
+    assert u["thinking_tokens"] == 9800                   # surfaced raw for the canary proof
+    # absent thoughts field → no crash, thinking counted as 0
+    bare = usage_tokens({"promptTokenCount": 10, "candidatesTokenCount": 5})
+    assert bare["input_tokens"] == 10 and bare["output_tokens"] == 5 and bare["thinking_tokens"] == 0
 
 
 def test_submit_marks_rows_batched(conn):

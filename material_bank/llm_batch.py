@@ -61,12 +61,21 @@ def build_batch_request(row, *, prepare=_prep_image) -> dict:
     }
 
 
+# Value-first drain order: highest completeness (category-aware, feeds the publish
+# gate) drains first. completeness is 100% populated, and the priced ~78% of the
+# catalog IS the completeness-70+ band — so this puts priced, near-publishable,
+# most-sellable records first for free (single-column sort, no join). The spend is
+# then interruptible with maximum value captured: stop at any budget and you've
+# enriched the most important records, not a random slice. id breaks ties (stable).
+_VALUE_ORDER = "COALESCE(completeness,0) DESC, id"
+
+
 def _select(conn: sqlite3.Connection, limit: int):
     return conn.execute(
         f"SELECT id, {', '.join(_INPUT_FIELDS)}, image_url, llm_hash "
         "FROM products WHERE (llm_status IS NULL OR llm_status='stale' "
-        "OR llm_hash NOT LIKE ?) AND title IS NOT NULL "
-        "ORDER BY id LIMIT ?", (f"{PROMPT_VERSION}:%", limit)).fetchall()
+        f"OR llm_hash NOT LIKE ?) AND title IS NOT NULL "
+        f"ORDER BY {_VALUE_ORDER} LIMIT ?", (f"{PROMPT_VERSION}:%", limit)).fetchall()
 
 
 def submit_batch(conn: sqlite3.Connection, *, transport, limit: int = 5000,
