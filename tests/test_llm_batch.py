@@ -42,8 +42,23 @@ def test_build_batch_request_shape(conn):
     row = conn.execute(f"SELECT id, {', '.join(lb._INPUT_FIELDS)}, image_url FROM products LIMIT 1").fetchone()
     req = lb.build_batch_request(row, prepare=lambda u: None)
     assert req["key"] == str(row["id"])
-    assert req["request"]["generationConfig"]["responseMimeType"] == "application/json"
+    gc = req["request"]["generationConfig"]
+    assert gc["responseMimeType"] == "application/json"
+    assert gc["thinkingConfig"]["thinkingBudget"] == 0     # thinking OFF — cost control
     assert "Emperador" in req["request"]["contents"][0]["parts"][0]["text"]
+
+
+def test_usage_tokens_folds_thinking_into_output():
+    """Thinking tokens bill at the output rate but arrive in thoughtsTokenCount —
+    they MUST be counted or the ledger undercounts the real bill (the $291 gap)."""
+    from material_bank.llm_enrich import usage_tokens
+    u = usage_tokens({"promptTokenCount": 1800, "candidatesTokenCount": 450,
+                      "thoughtsTokenCount": 9800})
+    assert u["input_tokens"] == 1800
+    assert u["output_tokens"] == 450 + 9800               # visible answer + thinking
+    # absent thoughts field → no crash, just the visible answer
+    assert usage_tokens({"promptTokenCount": 10, "candidatesTokenCount": 5}) == \
+        {"input_tokens": 10, "output_tokens": 5}
 
 
 def test_submit_marks_rows_batched(conn):

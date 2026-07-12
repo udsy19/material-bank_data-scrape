@@ -27,6 +27,7 @@ import sqlite3
 
 from .db import now_iso
 from .llm_enrich import (
+    GEN_CONFIG,
     PROMPT_VERSION,
     _INPUT_FIELDS,
     build_prompt,
@@ -34,6 +35,7 @@ from .llm_enrich import (
     novelty_hash,
     sanitize,
     serialise,
+    usage_tokens,
     verify,
 )
 
@@ -54,8 +56,7 @@ def build_batch_request(row, *, prepare=_prep_image) -> dict:
         parts.append(as_inline_data(image))
     return {
         "key": str(row["id"]),
-        "request": {"contents": [{"parts": parts}],
-                    "generationConfig": {"responseMimeType": "application/json"}},
+        "request": {"contents": [{"parts": parts}], "generationConfig": GEN_CONFIG},
     }
 
 
@@ -275,10 +276,8 @@ class GeminiBatchTransport:
             try:
                 resp = item["response"]
                 txt = resp["candidates"][0]["content"]["parts"][0]["text"]
-                um = resp.get("usageMetadata") or {}
                 out.append({"key": key, "text": txt,
-                            "usage": {"input_tokens": um.get("promptTokenCount", 0),
-                                      "output_tokens": um.get("candidatesTokenCount", 0)}})
+                            "usage": usage_tokens(resp.get("usageMetadata") or {})})
             except (KeyError, IndexError, TypeError):
                 out.append({"key": key, "error": item.get("error") or "no candidates"})
         return out

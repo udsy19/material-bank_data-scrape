@@ -450,6 +450,22 @@ def drain_concurrent(db_path, *, model_name: str = "gemini-flash-latest", worker
     return out
 
 
+# Shared generationConfig for every Gemini call (realtime + batch).
+# thinkingBudget=0 turns OFF chain-of-thought: this is deterministic structured
+# extraction, not reasoning — thinking added ~10k tokens/call (billed at the OUTPUT
+# rate) for no quality gain and drove the true cost ~14x over our metered estimate.
+GEN_CONFIG = {"responseMimeType": "application/json",
+              "thinkingConfig": {"thinkingBudget": 0}}
+
+
+def usage_tokens(um: dict) -> dict:
+    """Billed token counts from a Gemini usageMetadata block. Thinking tokens bill at
+    the OUTPUT rate but arrive in thoughtsTokenCount — NOT candidatesTokenCount — so
+    they must be folded into output or the ledger silently undercounts the real bill."""
+    return {"input_tokens": um.get("promptTokenCount", 0),
+            "output_tokens": um.get("candidatesTokenCount", 0) + um.get("thoughtsTokenCount", 0)}
+
+
 def gemini_client(model: str = "gemini-flash-latest"):
     """Default live client (realtime Gemini). Requires GEMINI_API_KEY.
     Auth via the x-goog-api-key header (works for both key formats).
@@ -467,8 +483,7 @@ def gemini_client(model: str = "gemini-flash-latest"):
         parts = [{"text": prompt}]
         if image_jpeg:
             parts.append(image_prep.as_inline_data(image_jpeg))     # the image the model sees
-        payload = {"contents": [{"parts": parts}],
-                   "generationConfig": {"responseMimeType": "application/json"}}
+        payload = {"contents": [{"parts": parts}], "generationConfig": GEN_CONFIG}
         last = ""
         for i in range(4):                             # backoff-retry transient errors
             r = requests.post(url, headers={"x-goog-api-key": key, "Content-Type": "application/json"},
@@ -477,8 +492,7 @@ def gemini_client(model: str = "gemini-flash-latest"):
             if r.status_code == 200 and "candidates" in body:
                 um = body.get("usageMetadata") or {}
                 return {"output": extract_json(body["candidates"][0]["content"]["parts"][0]["text"]),
-                        "usage": {"input_tokens": um.get("promptTokenCount", 0),
-                                  "output_tokens": um.get("candidatesTokenCount", 0)}}
+                        "usage": usage_tokens(um)}
             last = f"gemini {r.status_code}: {(body.get('error') or {}).get('status', '')}"
             if r.status_code in (429, 500, 503) and i < 3:
                 time.sleep(1.5 * (2 ** i))             # 1.5s, 3s, 6s
