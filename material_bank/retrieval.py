@@ -254,29 +254,63 @@ def list_products(
         where.append("p.publish_ready = 0")
     clause = ("WHERE " + " AND ".join(where)) if where else ""
 
-    # freshest price per product via a grouped subquery
-    base = f"""
-        FROM products p
-        LEFT JOIN (
-            SELECT product_id, price_inr, price_unit, basis,
-                   ROW_NUMBER() OVER (PARTITION BY product_id ORDER BY observed_at DESC) rn
-            FROM price_observation
-        ) l ON l.product_id = p.id AND l.rn = 1
-        {clause}
-    """
-    total = conn.execute(f"SELECT COUNT(*) {base}", params).fetchone()[0]
     order_col = _LIST_ORDER.get(order, "p.id")
     direction = "DESC" if desc else "ASC"
+    # The freshest-price window over ALL price_observation rows is expensive, so only
+    # pay it when a price filter/sort actually needs it. The common browse (by category/
+    # supplier/etc.) skips the join entirely and fetches prices for just the returned
+    # page — turning a 147k-row window on every call into a plain indexed products scan.
+    needs_price_join = (priced is not None or min_price is not None
+                        or max_price is not None or order == "price")
+    if needs_price_join:
+        base = f"""
+            FROM products p
+            LEFT JOIN (
+                SELECT product_id, price_inr, price_unit, basis,
+                       ROW_NUMBER() OVER (PARTITION BY product_id ORDER BY observed_at DESC) rn
+                FROM price_observation
+            ) l ON l.product_id = p.id AND l.rn = 1
+            {clause}
+        """
+        price_cols = "l.price_inr, l.basis AS price_basis"
+    else:
+        base = f"FROM products p {clause}"
+        price_cols = "NULL AS price_inr, NULL AS price_basis"
+    total = conn.execute(f"SELECT COUNT(*) {base}", params).fetchone()[0]
     rows = conn.execute(
         f"""SELECT p.id, p.brand, p.title, p.category, p.size_mm, p.finish,
                    p.price_unit, p.coverage_sqft_per_box, p.image_url, p.source_url,
-                   p.supplier_domain, l.price_inr, l.basis AS price_basis,
+                   p.supplier_domain, {price_cols},
                    p.completeness, p.verification_tier, p.publish_ready,
                    p.family, p.category_std, p.omniclass, p.variant_group_id
             {base} ORDER BY {order_col} {direction}, p.id LIMIT ? OFFSET ?""",
         [*params, limit, offset]).fetchall()
+    items = [dict(r) for r in rows]
+    if not needs_price_join:
+        _attach_freshest_prices(conn, items)      # prices for just this page (~50 ids)
     return {"total": total, "count": len(rows), "limit": limit, "offset": offset,
-            "items": [dict(r) for r in rows]}
+            "items": items}
+
+
+def _attach_freshest_prices(conn: sqlite3.Connection, items: list[dict]) -> None:
+    """Fill price_inr/price_basis for an already-fetched page by looking up the freshest
+    observation for only those product ids (fast with idx_price_obs_product_observed) —
+    instead of windowing the whole price_observation table in the listing query."""
+    ids = [it["id"] for it in items]
+    if not ids:
+        return
+    ph = ",".join("?" * len(ids))
+    latest = {r["product_id"]: r for r in conn.execute(
+        f"""SELECT product_id, price_inr, basis FROM (
+                SELECT product_id, price_inr, basis,
+                       ROW_NUMBER() OVER (PARTITION BY product_id ORDER BY observed_at DESC) rn
+                FROM price_observation WHERE product_id IN ({ph})
+            ) WHERE rn = 1""", ids)}
+    for it in items:
+        pr = latest.get(it["id"])
+        if pr:
+            it["price_inr"] = pr["price_inr"]
+            it["price_basis"] = pr["basis"]
 
 
 def list_designs(

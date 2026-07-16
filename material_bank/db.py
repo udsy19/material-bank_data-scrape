@@ -19,13 +19,16 @@ from urllib.parse import urlparse
 
 from .models import NormalizedProduct, PriceObservation, Supplier
 
-SCHEMA_VERSION = 19
+SCHEMA_VERSION = 20
 
 _REPO_ROOT = Path(__file__).resolve().parent.parent
 DEFAULT_DB_PATH = _REPO_ROOT / "data" / "catalog.db"
 # Seed sources, in precedence order (first occurrence of a domain wins).
 NEW_REGISTRY_CSV = _REPO_ROOT / "suppliers.csv"
 DSOURCE_SEED_CSV = _REPO_ROOT / "data" / "seed" / "manufacturers_dsource.csv"
+# India Design ID exhibitor domains resolved by discover.py (LOWEST precedence:
+# curated rows above win on collision, the exhibitor origin is grafted into notes).
+ID_EXHIBITORS_CSV = _REPO_ROOT / "data" / "seed" / "india_design_id_resolved.csv"
 
 _SUPPLIERS_DDL = """
 CREATE TABLE IF NOT EXISTS suppliers (
@@ -125,7 +128,48 @@ def connect(db_path: Path | str = DEFAULT_DB_PATH, *, check_same_thread: bool = 
         conn.execute("PRAGMA journal_mode = WAL")  # readers don't block the writer
     except sqlite3.OperationalError:
         pass
+    # Cap WAL bloat: without this a checkpoint that can't truncate (a reader is mid-
+    # snapshot during heavy writes) lets the -wal grow unbounded — it hit 562MB once
+    # and locked out migrate. journal_size_limit truncates the WAL back to 64MB after
+    # each checkpoint, so it stays bounded regardless of reader/writer overlap.
+    conn.execute("PRAGMA journal_size_limit = 67108864")
     return conn
+
+
+def connect_reader(db_path: Path | str = DEFAULT_DB_PATH) -> sqlite3.Connection:
+    """A per-thread READ connection for the serving path. Deliberately does NOT run
+    ``PRAGMA journal_mode`` (changing journal mode needs a write lock, so a fresh
+    connection would BLOCK up to busy_timeout behind an active writer — probe/harvest/
+    enrich — which is exactly what hung the API). A WAL database is read concurrently
+    by any number of plain connections without setting the mode. ``query_only`` is the
+    safety belt: this connection physically cannot write the catalog. NOTE: ``mode=ro``
+    is NOT usable here — a read-only open of a LIVE WAL db needs -shm write access and
+    hangs; ``query_only`` on a normal open is the correct read-concurrent path."""
+    conn = sqlite3.connect(str(Path(db_path)), timeout=30.0)
+    conn.row_factory = sqlite3.Row
+    conn.execute("PRAGMA busy_timeout = 30000")
+    conn.execute("PRAGMA query_only = ON")
+    return conn
+
+
+def run_locked(conn: sqlite3.Connection, fn, *, tries: int = 6):
+    """Run a write-then-commit closure, retrying on 'database is locked'. Concurrent
+    writers (harvest workers + mb-embed + enrich) saturate the WAL write path, and
+    busy_timeout can't clear a snapshot deadlock (it returns SQLITE_BUSY immediately) —
+    only rollback + a fresh attempt can. The canonical product-write retry; ``fn`` must
+    be idempotent under rollback (it re-runs from a clean state)."""
+    import time
+    for attempt in range(tries):
+        try:
+            return fn()
+        except sqlite3.OperationalError as e:
+            if "locked" not in str(e).lower() or attempt == tries - 1:
+                raise
+            try:
+                conn.rollback()
+            except sqlite3.OperationalError:
+                pass
+            time.sleep(0.2 * (attempt + 1))
 
 
 # Ordered, idempotent migrations. Each runs once; its version is stamped so a
@@ -464,6 +508,11 @@ _MIGRATIONS = (
         CREATE INDEX IF NOT EXISTS idx_batch_jobs_status ON llm_batch_jobs(status);
         """,
      "llm_batch_jobs: first-class resumable batch jobs"),
+    (20, """
+        CREATE INDEX IF NOT EXISTS idx_price_obs_product_observed
+            ON price_observation(product_id, observed_at);
+        """,
+     "price_observation(product_id, observed_at): freshest-price lookups for the listing API"),
 )
 
 
@@ -566,17 +615,47 @@ def _rows_from_dsource(path: Path) -> list[Supplier]:
     return out
 
 
+def _rows_from_id_exhibitors(path: Path) -> list[Supplier]:
+    """India Design ID exhibitor rows (brand, domain, profile_url) from discover.py.
+    Rows whose domain never resolved (blank) are skipped — they carry no harvest
+    target. The profile_url is kept in notes as provenance."""
+    if not path.exists():
+        return []
+    out: list[Supplier] = []
+    with path.open(newline="", encoding="utf-8") as fh:
+        for r in csv.DictReader(fh):
+            domain = normalize_domain(r.get("domain", ""))
+            if not domain:
+                continue                       # unresolved brand — nothing to harvest yet
+            notes = _hint(source="india_design_id", profile=r.get("profile_url", "").strip())
+            out.append(
+                Supplier(
+                    brand=r["brand"].strip(),
+                    domain=domain,
+                    categories="",             # derived by probe/enrich, not asserted here
+                    domain_confidence="medium",  # heuristically resolved from the profile page
+                    status="active",
+                    notes=notes,
+                )
+            )
+    return out
+
+
 def load_seed(
     new_csv: Path | str = NEW_REGISTRY_CSV,
     dsource_csv: Path | str = DSOURCE_SEED_CSV,
+    id_exhibitors_csv: Path | str = ID_EXHIBITORS_CSV,
 ) -> list[Supplier]:
-    """Merge both seed CSVs, deduped on normalized domain (new CSV wins).
+    """Merge the seed CSVs, deduped on normalized domain (earlier source wins).
 
-    On a domain collision, the DSource row's harvest hint is appended to the
-    surviving row's notes so nothing learned in DSource is lost.
+    Precedence: curated ``suppliers.csv`` > DSource > India Design ID exhibitors.
+    On a domain collision the later row's hint is appended to the surviving row's
+    notes so nothing learned downstream is lost.
     """
     merged: dict[str, Supplier] = {}
-    for supplier in _rows_from_new_registry(Path(new_csv)) + _rows_from_dsource(Path(dsource_csv)):
+    for supplier in (_rows_from_new_registry(Path(new_csv))
+                     + _rows_from_dsource(Path(dsource_csv))
+                     + _rows_from_id_exhibitors(Path(id_exhibitors_csv))):
         key = supplier.domain
         if not key:
             continue
@@ -595,56 +674,63 @@ def upsert_product(conn: sqlite3.Connection, product: NormalizedProduct,
     prov = json.dumps({k: v.model_dump() for k, v in product.provenance.items()})
     missing = json.dumps(product.missing)
     ts = now_iso()
-    conn.execute(
-        """
-        INSERT INTO products (supplier_domain, brand, sku, title, category, size_mm,
-            finish, price_unit, coverage_sqft_per_box, image_url, source_url, provenance,
-            missing, created_at, updated_at)
-        VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
-        ON CONFLICT(brand, sku) DO UPDATE SET
-            supplier_domain=excluded.supplier_domain, title=excluded.title,
-            category=excluded.category, size_mm=excluded.size_mm, finish=excluded.finish,
-            price_unit=excluded.price_unit, coverage_sqft_per_box=excluded.coverage_sqft_per_box,
-            image_url=COALESCE(excluded.image_url, products.image_url),
-            source_url=COALESCE(excluded.source_url, products.source_url),
-            provenance=excluded.provenance, missing=excluded.missing, updated_at=excluded.updated_at
-        """,
-        (supplier_domain, product.brand, product.sku, product.title, product.category,
-         product.size_mm, product.finish,
-         product.price_unit.value if product.price_unit else None,
-         product.coverage_sqft_per_box, product.image_url, product.source_url, prov, missing, ts, ts),
-    )
-    row = conn.execute(
-        "SELECT id FROM products WHERE brand=? AND sku=?", (product.brand, product.sku)
-    ).fetchone()
-    conn.commit()
-    return row["id"]
+
+    def _w():
+        conn.execute(
+            """
+            INSERT INTO products (supplier_domain, brand, sku, title, category, size_mm,
+                finish, price_unit, coverage_sqft_per_box, image_url, source_url, provenance,
+                missing, created_at, updated_at)
+            VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+            ON CONFLICT(brand, sku) DO UPDATE SET
+                supplier_domain=excluded.supplier_domain, title=excluded.title,
+                category=excluded.category, size_mm=excluded.size_mm, finish=excluded.finish,
+                price_unit=excluded.price_unit, coverage_sqft_per_box=excluded.coverage_sqft_per_box,
+                image_url=COALESCE(excluded.image_url, products.image_url),
+                source_url=COALESCE(excluded.source_url, products.source_url),
+                provenance=excluded.provenance, missing=excluded.missing, updated_at=excluded.updated_at
+            """,
+            (supplier_domain, product.brand, product.sku, product.title, product.category,
+             product.size_mm, product.finish,
+             product.price_unit.value if product.price_unit else None,
+             product.coverage_sqft_per_box, product.image_url, product.source_url, prov, missing, ts, ts),
+        )
+        row = conn.execute(
+            "SELECT id FROM products WHERE brand=? AND sku=?", (product.brand, product.sku)
+        ).fetchone()
+        conn.commit()
+        return row["id"]
+    return run_locked(conn, _w)
 
 
 def add_price_observation(conn: sqlite3.Connection, product_id: int,
                           obs: PriceObservation) -> None:
     """Append a price observation (idempotent: identical re-observation ignored)."""
-    conn.execute(
-        """
-        INSERT OR IGNORE INTO price_observation
-            (product_id, source, price_inr, price_unit, basis, observed_at, source_url)
-        VALUES (?,?,?,?,?,?,?)
-        """,
-        (product_id, obs.source, obs.price_inr,
-         obs.price_unit.value if obs.price_unit else None,
-         obs.basis.value, obs.observed_at, obs.source_url),
-    )
-    conn.commit()
+    def _w():
+        conn.execute(
+            """
+            INSERT OR IGNORE INTO price_observation
+                (product_id, source, price_inr, price_unit, basis, observed_at, source_url)
+            VALUES (?,?,?,?,?,?,?)
+            """,
+            (product_id, obs.source, obs.price_inr,
+             obs.price_unit.value if obs.price_unit else None,
+             obs.basis.value, obs.observed_at, obs.source_url),
+        )
+        conn.commit()
+    run_locked(conn, _w)
 
 
 def quarantine(conn: sqlite3.Connection, *, stage: str, source_url: str,
                reason: str, raw_ref: str | None = None) -> None:
-    conn.execute(
-        "INSERT INTO quarantine (stage, source_url, reason, raw_ref, created_at) "
-        "VALUES (?,?,?,?,?)",
-        (stage, source_url, reason, raw_ref, now_iso()),
-    )
-    conn.commit()
+    def _w():
+        conn.execute(
+            "INSERT INTO quarantine (stage, source_url, reason, raw_ref, created_at) "
+            "VALUES (?,?,?,?,?)",
+            (stage, source_url, reason, raw_ref, now_iso()),
+        )
+        conn.commit()
+    run_locked(conn, _w)
 
 
 def seed(conn: sqlite3.Connection, suppliers: list[Supplier] | None = None) -> int:

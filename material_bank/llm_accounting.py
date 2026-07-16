@@ -6,8 +6,16 @@ provider's usageMetadata) and a ₹ cost derived from them at the published rate
 Nothing is estimated. This is the source of truth for spend, the budget
 circuit-breaker, and the LLM-ops cockpit.
 
-Rates are kept visible (``PRICING`` + ``USD_INR``) so the ₹ math is auditable
-and trivially updated when Google changes pricing. Batch is billed at 50%.
+Rates are a HAND-MAINTAINED forecast layer, not the source of truth for money:
+Google exposes no pricing API (``models.get`` carries token limits + capabilities
+but no price), so ``PRICING`` is transcribed from the public pricing page and
+dated (``PRICING_AS_OF``). The ACTUAL truth is the billing console — see
+``reconcile()``. Two guards keep the forecast from silently drifting from reality:
+(1) spend is priced by the model that ACTUALLY RAN (the response ``modelVersion``,
+logged into the ``model`` column) — never the requested ``-latest`` alias, which
+can repoint to a 4×-pricier generation with no local diff; (2) a model with no
+known rate is priced at the priciest rate (never undercount) AND flagged in the
+report so the drift is visible, not buried. Batch is billed at 50%.
 """
 
 from __future__ import annotations
@@ -17,21 +25,42 @@ import sqlite3
 from .db import now_iso
 
 USD_INR = 83.0                              # update as needed; shown in the report
+PRICING_AS_OF = "2026-07"                   # hand-transcribed; Gemini has no pricing API
+PRICING_SOURCE = "https://ai.google.dev/gemini-api/docs/pricing"
 # model -> (input $/1M tokens, output $/1M tokens), published Gemini rates.
 PRICING = {
-    "gemini-flash-latest": (0.30, 2.50),        # alias -> 2.5-flash rate
-    "gemini-2.5-flash": (0.30, 2.50),
-    "gemini-flash-lite-latest": (0.10, 0.40),
+    # Floating aliases repoint across generations — priced at their CURRENT
+    # resolution (verified 2026-07 via modelVersion): -latest => gemini-3.5-flash.
+    "gemini-flash-latest": (1.50, 9.00),        # alias -> 3.5-flash (was 2.5 @ 0.30/2.50)
+    "gemini-flash-lite-latest": (0.25, 1.50),   # alias -> 3.1-flash-lite
+    "gemini-3.5-flash": (1.50, 9.00),           # canary ceiling probe: grounding 0.657 @ ₹0.28/product
+    "gemini-3.1-flash-lite": (0.25, 1.50),      # THE PIN: canary 0.582 grounding @ ₹0.044/product
+    "gemini-2.5-flash": (0.30, 2.50),           # 404s for this key — kept for history
     "gemini-2.5-flash-lite": (0.10, 0.40),
     "gemini-2.5-pro": (1.25, 10.00),
     "gemini-2.0-flash": (0.10, 0.40),
 }
-_DEFAULT_RATE = (0.30, 2.50)
+# Unknown model => price at the priciest known rate, never undercount (the $291 lesson).
+_DEFAULT_RATE = (1.50, 9.00)
+
+
+def is_priced(model: str) -> bool:
+    """Do we have a published rate for this model, or are we guessing (default)?"""
+    return model in PRICING
+
+
+def rate_for(model: str) -> tuple[float, float, bool]:
+    """(input $/1M, output $/1M, known). Unknown models get the priciest rate so
+    the ledger over-, never under-, estimates — and ``known=False`` lets the report
+    flag the spend instead of quietly trusting a guessed price."""
+    if model in PRICING:
+        return (*PRICING[model], True)
+    return (*_DEFAULT_RATE, False)
 
 
 def call_cost(input_tokens: int, output_tokens: int, model: str, *, batch: bool = False) -> float:
     """₹ cost of one call from its actual token counts (batch = 50% off)."""
-    ci, co = PRICING.get(model, _DEFAULT_RATE)
+    ci, co, _known = rate_for(model)
     usd = (input_tokens / 1e6) * ci + (output_tokens / 1e6) * co
     if batch:
         usd *= 0.5
@@ -93,17 +122,26 @@ def llm_report(conn: sqlite3.Connection, *, days: int = 30) -> dict:
                                        "FROM llm_calls GROUP BY status")}
     enriched = by_status.get("enriched", {}).get("calls", 0)
     verified = enriched + by_status.get("verifier_failed", {}).get("calls", 0)
+    by_model = _rows(conn, "SELECT model, COUNT(*) calls, ROUND(SUM(cost_inr),4) cost_inr, "
+                     "SUM(input_tokens) input_tokens, SUM(output_tokens) output_tokens "
+                     "FROM llm_calls GROUP BY model ORDER BY cost_inr DESC")
+    for m in by_model:                               # flag rows priced by guess, not by table
+        m["priced"] = is_priced(m["model"])
+    unpriced = [m for m in by_model if not m["priced"]]
     return {
-        "rates": {"usd_inr": USD_INR, "pricing_usd_per_1m": PRICING},
+        "rates": {"usd_inr": USD_INR, "pricing_usd_per_1m": PRICING,
+                  "as_of": PRICING_AS_OF, "source": PRICING_SOURCE},
+        # spend logged against a model with NO published rate (priced at the default,
+        # guessed): if this is nonzero, the ₹ figures are estimates — reconcile.
+        "unpriced_spend_inr": round(sum(m["cost_inr"] for m in unpriced), 4),
+        "unpriced_models": [m["model"] for m in unpriced],
         "all_time": {"calls": tot["n"], "cost_inr": round(tot["c"], 4),
                      "input_tokens": tot["it"], "output_tokens": tot["ot"]},
         "spend_today_inr": spend_since(conn, 1),
         "spend_window_inr": spend_since(conn, days),
         "by_status": by_status,
         "verifier_pass_rate": round(enriched / verified, 3) if verified else None,
-        "by_model": _rows(conn, "SELECT model, COUNT(*) calls, ROUND(SUM(cost_inr),4) cost_inr, "
-                          "SUM(input_tokens) input_tokens, SUM(output_tokens) output_tokens "
-                          "FROM llm_calls GROUP BY model ORDER BY cost_inr DESC"),
+        "by_model": by_model,
         "daily": _rows(conn, "SELECT substr(occurred_at,1,10) day, COUNT(*) calls, "
                        "ROUND(SUM(cost_inr),4) cost_inr FROM llm_calls "
                        "GROUP BY day ORDER BY day DESC LIMIT ?", days),
@@ -148,8 +186,14 @@ def main(argv=None) -> int:
     p("verifier pass-rate: %s   (%s: $%s/$%s per 1M in/out, ₹%.0f/$)"
       % (rep["verifier_pass_rate"], MODEL, *PRICING.get(MODEL, _DEFAULT_RATE), USD_INR))
     p("by status:", {k: f"{v['calls']} (₹{v['cost_inr']:.2f})" for k, v in rep["by_status"].items()})
+    p("rates as of %s (%s) — reconcile against the billing console for truth"
+      % (rep["rates"]["as_of"], rep["rates"]["source"]))
+    if rep["unpriced_spend_inr"]:
+        p("  ⚠ ₹%.2f logged on UNPRICED models %s — priced at the default guess, VERIFY"
+          % (rep["unpriced_spend_inr"], rep["unpriced_models"]))
     for m in rep["by_model"]:
-        p("  model %-22s %5d calls  ₹%.2f" % (m["model"], m["calls"], m["cost_inr"]))
+        p("  model %-22s %5d calls  ₹%.2f%s" % (m["model"], m["calls"], m["cost_inr"],
+                                                "" if m["priced"] else "  ⚠ unpriced"))
     p("recent calls:")
     for c in recent_calls(conn, limit=args.calls)["items"]:
         p("  #%d %s  %s  a%d  %s  in%d/out%d  ₹%.4f  %sms  %s"

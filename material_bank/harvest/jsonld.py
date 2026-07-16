@@ -52,6 +52,74 @@ def _first_image(node: dict) -> str | None:
     return (jpgs or urls)[0]
 
 
+def _meta(html: str, prop: str) -> str | None:
+    """Extract an og:/meta content value (property or name, either attr order)."""
+    p = re.escape(prop)
+    m = (re.search(rf'(?:property|name)=["\']{p}["\'][^>]*content=["\']([^"\']+)', html, re.I)
+         or re.search(rf'content=["\']([^"\']+)["\'][^>]*(?:property|name)=["\']{p}["\']', html, re.I))
+    return m.group(1).strip() if m else None
+
+
+def _h1(html: str) -> str | None:
+    m = re.search(r"<h1[^>]*>(.*?)</h1>", html, re.I | re.S)
+    if not m:
+        return None
+    txt = re.sub(r"\s+", " ", re.sub(r"<[^>]+>", " ", m.group(1))).strip()
+    return txt or None
+
+
+def _looks_like_code(s: str) -> bool:
+    """A SKU/part-number masquerading as a title: a single token containing a digit,
+    or an all-caps token (e.g. 'RTM-06-0001', 'BL-20(EM)-0001'). Real titles have
+    spaces + lowercase words ('handknotted table mats')."""
+    s = (s or "").strip()
+    if not s:
+        return True
+    if " " in s:
+        return False
+    return any(c.isdigit() for c in s) or s.isupper()
+
+
+def _best_title(node: dict, html: str, sku: str) -> str | None:
+    """The JSON-LD name is authoritative UNLESS the site dumped the SKU there (jaipur-
+    rugs et al.). Then fall back to the page's <h1>, then og:title — the human name is
+    right there, we just weren't reading it."""
+    name = (node.get("name") or "").strip()
+    if name and not _looks_like_code(name) and name.lower() != (sku or "").strip().lower():
+        return name
+    for cand in (_h1(html), _meta(html, "og:title")):
+        cand = (cand or "").strip()
+        if cand and not _looks_like_code(cand):
+            return cand
+    return name or None
+
+
+def _html_price(html: str):
+    """Price from HTML when JSON-LD carries no offer: price meta tags, microdata, then
+    a conservative ₹/Rs/INR-prefixed number. Returns None if nothing credible (a truly
+    unpriced page stays honestly unpriced — never fabricate)."""
+    for prop in ("product:price:amount", "og:price:amount"):
+        v = _meta(html, prop)
+        if v:
+            try:
+                f = float(v.replace(",", "").replace("₹", "").strip())
+                if f > 0:
+                    return f
+            except ValueError:
+                pass
+    m = re.search(r'itemprop=["\']price["\'][^>]*content=["\']([\d.,]+)', html, re.I)
+    if not m:
+        m = re.search(r"(?:₹|&#8377;|\bRs\.?\s|\bINR\s)\s*([\d][\d,]{2,})", html)
+    if m:
+        try:
+            f = float(m.group(1).replace(",", ""))
+            if f > 0:
+                return f
+        except ValueError:
+            pass
+    return None
+
+
 def _parse_price(node: dict):
     offers = node.get("offers")
     for off in (offers if isinstance(offers, list) else [offers]):
@@ -76,14 +144,16 @@ def parse_pdp(html: str, url: str, *, brand: str, category: str):
     if not products:
         return None
     node = products[0]
-    title = (node.get("name") or "").strip()
+    sku = (node.get("sku") or node.get("productID") or node.get("mpn") or "").strip() or _slug(url)
+    title = _best_title(node, html, sku)              # JSON-LD name, else <h1>/og:title
     if not title or is_placeholder_title(title):
         return None
-    sku = (node.get("sku") or node.get("productID") or node.get("mpn") or "").strip() or _slug(url)
     price, unit = _parse_price(node)
+    if price is None:                                 # no JSON-LD offer -> try the HTML
+        price = _html_price(html)
     product = build_product(
         brand=_brand_of(node, brand), sku=str(sku), title=title, category=category,
-        source=url, image_url=_first_image(node), price_unit=unit)
+        source=url, image_url=_first_image(node) or _meta(html, "og:image"), price_unit=unit)
     obs = None
     if price is not None:
         obs = PriceObservation(source=urlparse(url).netloc.replace("www.", ""),
@@ -132,12 +202,15 @@ def harvest_jsonld(
     sitemap_url: str | None = None,
     base_host: str | None = None,
     limit: int | None = None,
+    refresh: bool = False,
     on_item=None,
 ) -> dict:
     host = base_host or domain
     sitemap_url = sitemap_url or f"https://{host}/sitemap.xml"
     urls = enumerate_pdp_urls(fetcher, sitemap_url)
-    seen = _already(conn, domain)
+    # refresh=True re-fetches + re-parses every PDP (upsert UPDATES title/price/image in
+    # place) — used to re-apply an improved extractor to already-harvested rows.
+    seen = set() if refresh else _already(conn, domain)
     # reachable = the sitemap yielded PDPs, or we've harvested this domain before.
     reachable = len(urls) > 0 or bool(seen)
     urls = [u for u in urls if u not in seen]  # exact source_url resume

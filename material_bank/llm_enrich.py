@@ -24,14 +24,15 @@ from .db import now_iso
 
 PROMPT_VERSION = "v4"
 
-# The ONE place the Gemini model is chosen (pin chokepoint). This is a FLOATING
-# ALIAS: Google can repoint `gemini-flash-latest` to a newer, several-times-pricier
-# generation with zero change here — silently repeating the thinking-token cost
-# incident, but next time with no local diff to even diagnose. Before any at-scale
-# resume, resolve this alias to its concrete versioned snapshot (`models.get`) and
-# pin that exact string here; treat a model change as a deliberate, re-evaluated
-# decision, not a default. Everything (harvest, batch, eval, pricing) reads this.
-MODEL = "gemini-flash-latest"
+# The ONE place the Gemini model is chosen (pin chokepoint). PIN A CONCRETE
+# GENERATION, never a `-latest` alias: on 2026-07 `gemini-flash-latest` had silently
+# repointed from 2.5-flash ($0.30/$2.50) to gemini-3.5-flash ($1.50/$9.00) — a 4×
+# batch cost jump with zero local diff, exactly the invisible-cost failure mode from
+# the thinking-token incident. `gemini-2.5-flash` itself now 404s for this key.
+# 3.1-flash-lite chosen deliberately (batch $0.125/$0.75 ≈ ₹0.047/product, cheaper
+# than the old 2.5-flash baseline). A model change here is a re-evaluated decision
+# (re-canary + repriced), never a default. Everything (harvest, batch, eval) reads this.
+MODEL = "gemini-3.1-flash-lite"
 
 # words that don't count as "new information" when checking for restatement filler
 _STOPWORDS = {
@@ -136,6 +137,14 @@ Rules (prompt {PROMPT_VERSION}):
 - style_tags: 0-3 from the allowed vocab, only if the image or text supports it. Empty [] is fine.
 - vision (from the IMAGE only; "unknown" if no image or unsure): colour_primary, pattern, surface_look, material_appearance.
 """
+
+
+def reject_suffix(reason: str) -> str:
+    """Feedback appended to a re-attempt prompt so the model FIXES the exact rejection
+    instead of blindly re-rolling. Shared by the realtime retry and the batch
+    recovery sweep, so both speak to the model identically."""
+    return (f"\n\nYOUR PREVIOUS OUTPUT WAS REJECTED — reason: {reason}. "
+            "Return corrected strict JSON that fixes exactly this and nothing else.")
 
 
 def build_prompt(input_text: str, has_image: bool) -> str:
@@ -305,10 +314,11 @@ def extract_json(text: str) -> dict:
 
 
 def _unpack(res):
-    """Accept a rich client result {output, usage} or a bare output dict (fakes)."""
+    """Accept a rich client result {output, usage, model_version} or a bare output
+    dict (fakes). Returns (output, usage, model_version|None)."""
     if isinstance(res, dict) and "output" in res and "usage" in res:
-        return res["output"], res.get("usage") or {}
-    return res, {}
+        return res["output"], res.get("usage") or {}, res.get("model_version")
+    return res, {}, None
 
 
 _SELECT_COLS = f"id, {', '.join(_INPUT_FIELDS)}, image_url, llm_hash"
@@ -375,9 +385,7 @@ def _attempt_calls(client, input_text, image, fmap, model_name, phase, *, max_at
     base = build_prompt(input_text, bool(image))
     logs, out, ok, prev = [], None, False, None
     for attempt in range(max_attempts):
-        prompt = base if prev is None else (
-            base + f"\n\nYOUR PREVIOUS OUTPUT WAS REJECTED — reason: {prev}. "
-                   "Return corrected strict JSON that fixes exactly this and nothing else.")
+        prompt = base if prev is None else base + reject_suffix(prev)
         t0 = time.monotonic()
         try:
             res = client(prompt, image)
@@ -388,10 +396,10 @@ def _attempt_calls(client, input_text, image, fmap, model_name, phase, *, max_at
             prev = None
             continue
         latency = int((time.monotonic() - t0) * 1000)
-        o, usage = _unpack(res)
+        o, usage, model_version = _unpack(res)
         o = sanitize(o, fmap, input_text)              # deterministic use-case tags + evidence style
         fails = verify(o, fmap, input_text)            # hard checks only -> retry
-        logs.append({"model": model_name, "phase": phase, "attempt": attempt,
+        logs.append({"model": model_version or model_name, "phase": phase, "attempt": attempt,
                      "input_tokens": usage.get("input_tokens", 0),
                      "output_tokens": usage.get("output_tokens", 0), "latency_ms": latency,
                      "status": "enriched" if not fails else "verifier_failed",
@@ -505,7 +513,10 @@ def gemini_client(model: str = MODEL):
             if r.status_code == 200 and "candidates" in body:
                 um = body.get("usageMetadata") or {}
                 return {"output": extract_json(body["candidates"][0]["content"]["parts"][0]["text"]),
-                        "usage": usage_tokens(um)}
+                        "usage": usage_tokens(um),
+                        # the model that ACTUALLY ran — priced off this, not the requested
+                        # alias, so a silent -latest repoint can't misprice the ledger.
+                        "model_version": body.get("modelVersion")}
             last = f"gemini {r.status_code}: {(body.get('error') or {}).get('status', '')}"
             if r.status_code in (429, 500, 503) and i < 3:
                 time.sleep(1.5 * (2 ** i))             # 1.5s, 3s, 6s

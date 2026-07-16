@@ -1,0 +1,24 @@
+[Unit]
+# One-pass, RESUMABLE tier3 (Playwright) harvest of the India Design ID tier3 suppliers.
+# The driver skips already-harvested SKUs (_already), so a restart continues where it
+# left off; it exits 0 once every supplier has had its capped pass (then the service
+# stops). MemoryMax caps THIS unit so a browser spike kills tier3 — never mb-api — and
+# Restart=on-failure brings it back to resume. Multi-hour/day crawl; fully hands-off.
+Description=Material Bank — tier3 (browser) harvest of India Design ID suppliers, resumable
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=__APP_USER__
+WorkingDirectory=__APP_DIR__
+EnvironmentFile=-__APP_DIR__/.env
+ExecStart=__APP_DIR__/.venv/bin/python __APP_DIR__/_tier3.py
+MemoryMax=3G
+Restart=on-failure
+RestartSec=30
+StandardOutput=append:__APP_DIR__/reports/mb-tier3.log
+StandardError=append:__APP_DIR__/reports/mb-tier3.log
+
+[Install]
+WantedBy=multi-user.target

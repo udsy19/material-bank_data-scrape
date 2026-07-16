@@ -8,11 +8,17 @@ keeps a full-catalog dump ~tens of MB gzipped — small enough to push to GitHub
 
 Every dump is verified by actually restoring it into a temp database and
 checking row counts — a backup that can't restore is not a backup.
+
+Both directions stream through the sqlite3 CLI in fixed-size chunks: the dump
+SQL is ~600MB of text at 250k products, and holding it in a Python str (plus
+executescript's copy on the verify side) OOM-killed the backup on the 8GB VPS.
+Memory stays flat no matter how large the catalog grows.
 """
 
 from __future__ import annotations
 
 import gzip
+import shutil
 import subprocess
 import tempfile
 from pathlib import Path
@@ -24,39 +30,76 @@ ESSENTIAL_TABLES = (
     "quarantine", "pipeline_jobs", "harvest_history",
 )
 
+_CHUNK = 1 << 20  # 1MB
+
 
 def dump_essential(db_path: str | Path, out_gz: str | Path) -> dict:
     """Dump essential tables (schema+data) to a gzipped SQL file via the
-    sqlite3 CLI (portable, preserves DDL/constraints)."""
+    sqlite3 CLI (portable, preserves DDL/constraints), streamed chunk-by-chunk."""
     db_path, out_gz = Path(db_path), Path(out_gz)
     out_gz.parent.mkdir(parents=True, exist_ok=True)
     cmd = ["sqlite3", str(db_path)] + [f".dump {t}" for t in ESSENTIAL_TABLES]
-    res = subprocess.run(cmd, capture_output=True, text=True, timeout=1800)
-    if res.returncode != 0:
-        raise RuntimeError(f"sqlite3 .dump failed: {res.stderr[:300]}")
-    sql = res.stdout
-    if "CREATE TABLE" not in sql or "products" not in sql:
+    sql_bytes = 0
+    markers = {b"CREATE TABLE": False, b"products": False}
+    tail = b""
+    proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+    try:
+        with gzip.open(out_gz, "wb") as fh:
+            while True:
+                chunk = proc.stdout.read(_CHUNK)
+                if not chunk:
+                    break
+                sql_bytes += len(chunk)
+                probe = tail + chunk  # overlap so a marker split across chunks still hits
+                for m in markers:
+                    if not markers[m] and m in probe:
+                        markers[m] = True
+                tail = chunk[-32:]
+                fh.write(chunk)
+        stderr = proc.stderr.read()
+        rc = proc.wait(timeout=1800)
+    except BaseException:
+        proc.kill()
+        out_gz.unlink(missing_ok=True)
+        raise
+    if rc != 0:
+        out_gz.unlink(missing_ok=True)
+        raise RuntimeError(f"sqlite3 .dump failed: {stderr[:300].decode(errors='replace')}")
+    if not all(markers.values()):
+        out_gz.unlink(missing_ok=True)
         raise RuntimeError("dump looks empty/invalid — refusing to write")
-    with gzip.open(out_gz, "wt", encoding="utf-8") as fh:
-        fh.write(sql)
     return {"path": str(out_gz), "bytes": out_gz.stat().st_size,
-            "sql_bytes": len(sql)}
+            "sql_bytes": sql_bytes}
 
 
 def restore(dump_gz: str | Path, new_db_path: str | Path) -> dict:
     """Rebuild a working catalog.db from an essential dump.
 
-    Loads the dumped tables, then recreates the derived structures the dump
-    deliberately omits (embeddings table empty — the embed worker refills it;
-    FTS index rebuilt immediately so keyword search works on boot).
+    Streams the dumped SQL into the sqlite3 CLI (-bail: first error aborts with
+    a nonzero exit), then recreates the derived structures the dump deliberately
+    omits (embeddings table empty — the embed worker refills it; FTS index
+    rebuilt immediately so keyword search works on boot).
     """
     new_db_path = Path(new_db_path)
     if new_db_path.exists():
         raise FileExistsError(f"{new_db_path} exists — refusing to overwrite")
-    with gzip.open(dump_gz, "rt", encoding="utf-8") as fh:
-        sql = fh.read()
+    proc = subprocess.Popen(["sqlite3", "-bail", str(new_db_path)],
+                            stdin=subprocess.PIPE, stderr=subprocess.PIPE)
+    try:
+        with gzip.open(dump_gz, "rb") as fh:
+            try:
+                shutil.copyfileobj(fh, proc.stdin, _CHUNK)
+                proc.stdin.close()
+            except BrokenPipeError:
+                pass  # sqlite3 bailed early; rc/stderr below say why
+        stderr = proc.stderr.read()
+        rc = proc.wait(timeout=3600)
+    except BaseException:
+        proc.kill()
+        raise
+    if rc != 0:
+        raise RuntimeError(f"restore failed: {stderr[:300].decode(errors='replace')}")
     conn = db_mod.connect(new_db_path)
-    conn.executescript(sql)
     # derived structures (IF NOT EXISTS; migrations won't re-run since
     # schema_version rows came with the dump)
     conn.executescript(db_mod._EMBEDDINGS_DDL)

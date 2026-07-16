@@ -20,7 +20,7 @@ from .. import db
 from ..fetch import Fetcher
 from ..models import NormalizedProduct
 from ..probe import _extract_jsonld_products
-from ..sitemap import parse_sitemap
+from ..sitemap import looks_like_product_sitemap, parse_sitemap
 from .common import build_product, is_placeholder_title
 
 # Finds the largest non-icon product image on the rendered page.
@@ -38,24 +38,43 @@ def slug_of(url: str) -> str:
     return path[-1] if path else url
 
 
+_PRODUCT_HINTS = ("/product", "/products/", "/p/", "/item", "/shop/", "/buy/", "/collections/")
+_ASSET_EXT = (".jpg", ".jpeg", ".png", ".webp", ".gif", ".svg", ".pdf", ".css", ".js")
+_NON_PRODUCT = ("/blog", "/news", "/about", "/contact", "/policy", "/policies", "/cart",
+                "/account", "/login", "/register", "/search", "/faq", "/terms", "/privacy",
+                "sitemap", ".xml", "/pages/", "/collections?")
+
+
 def is_pdp_url(url: str, pattern: str) -> bool:
     u = url.lower()
     return pattern in u and not any(x in u for x in ("/blog", "/news", "sitemap", ".xml"))
 
 
 def enumerate_pdp_urls(fetcher: Fetcher, sitemap_url: str, *, pattern: str = "/products/") -> list[str]:
+    """Candidate PDP URLs from a sitemap, robust to arbitrary site structures. A fixed
+    ``/products/`` pattern missed sites that don't use it (godrejinterio, lladro ->
+    0 candidates), so: prefer the pattern, else product-hint paths, else ALL non-asset/
+    non-boilerplate URLs — the render+extract step drops whatever isn't a real Product."""
     r = fetcher.get(sitemap_url)
     if not r.ok:
         return []
     kind, locs = parse_sitemap(r.text)
-    if kind == "index":  # follow children
+    if kind == "index":  # follow children (prefer product-looking child sitemaps)
+        children = [l for l in locs if looks_like_product_sitemap(l)] or locs
         out: list[str] = []
-        for child in locs[:20]:
+        for child in children[:50]:
             rc = fetcher.get(child)
             if rc.ok:
                 out += parse_sitemap(rc.text)[1]
         locs = out
-    return [u for u in locs if is_pdp_url(u, pattern)]
+    locs = [u for u in locs
+            if not u.lower().split("?")[0].endswith(_ASSET_EXT)
+            and not any(x in u.lower() for x in _NON_PRODUCT)]
+    hit = [u for u in locs if pattern in u.lower()]
+    if len(hit) >= 10:
+        return hit
+    hints = [u for u in locs if any(h in u.lower() for h in _PRODUCT_HINTS)]
+    return hints if len(hints) >= 10 else locs
 
 
 def extract(rendered: dict, url: str, *, brand: str, category: str) -> NormalizedProduct | None:

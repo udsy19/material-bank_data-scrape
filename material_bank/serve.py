@@ -6,6 +6,7 @@ marqo embedder and the numpy vector index over catalog.db.
 
 from __future__ import annotations
 
+import sqlite3
 import threading
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
@@ -58,13 +59,28 @@ def _prewarm_images(s: dict, urls: list[str]) -> None:
 def create_app(state_provider) -> FastAPI:
     """state_provider() -> dict(conn, store, embedder, fetcher). Called once, lazily."""
     app = FastAPI(title="DSource Material Bank")
-    lock = threading.Lock()
+    lock = threading.Lock()          # serializes the shared conn: writes + the embedder path
+    _tls = threading.local()
     state: dict = {}
 
     def S() -> dict:
         if not state:
             state.update(state_provider())
         return state
+
+    def rconn():
+        """A per-thread READ connection. WAL SQLite serves many readers at once, so
+        read endpoints no longer queue behind the single shared connection + global
+        lock — this is what lets external systems fetch in parallel instead of one at
+        a time. Falls back to the shared connection when no factory is wired (tests)."""
+        factory = S().get("conn_factory")
+        if factory is None:
+            return S()["conn"]
+        c = getattr(_tls, "conn", None)
+        if c is None:
+            c = factory()
+            _tls.conn = c
+        return c
 
     @app.get("/", response_class=HTMLResponse)
     def dashboard() -> str:
@@ -81,21 +97,19 @@ def create_app(state_provider) -> FastAPI:
 
     @app.get("/api/stats")
     def api_stats() -> dict:
-        s = S()
-        with lock:
-            return {**stats(s["conn"]), "top_suppliers": top_suppliers(s["conn"])}
+        c = rconn()
+        return {**stats(c), "top_suppliers": top_suppliers(c)}
 
     @app.get("/api/pipeline")
     def api_pipeline() -> dict:
         """Harvest-queue health so failures are visible, not buried."""
-        s = S()
-        with lock:
-            try:
-                return {"jobs": jobs.counts(s["conn"], "harvest"),
-                        "dead_letters": jobs.dead_letters(s["conn"], "harvest"),
-                        "repairs": jobs.counts(s["conn"], "repair")}
-            except Exception:
-                return {"jobs": {}, "dead_letters": [], "repairs": {}}  # pre-v6 db
+        c = rconn()
+        try:
+            return {"jobs": jobs.counts(c, "harvest"),
+                    "dead_letters": jobs.dead_letters(c, "harvest"),
+                    "repairs": jobs.counts(c, "repair")}
+        except Exception:
+            return {"jobs": {}, "dead_letters": [], "repairs": {}}  # pre-v6 db
 
     @app.get("/api/match")
     def api_match(q: str = Query("", min_length=0), k: int = Query(20, ge=1, le=60)) -> dict:
@@ -126,13 +140,11 @@ def create_app(state_provider) -> FastAPI:
         offset: int = Query(0, ge=0),
     ) -> dict:
         """Full internal listing (includes in-enrichment records; trust fields exposed)."""
-        s = S()
-        with lock:
-            return list_products(s["conn"], supplier=supplier, category=category, brand=brand,
-                                 family=family, category_std=category_std,
-                                 q=q, priced=priced, has_image=has_image, min_price=min_price,
-                                 max_price=max_price, publish_ready=publish_ready,
-                                 order=order, desc=desc, limit=limit, offset=offset)
+        return list_products(rconn(), supplier=supplier, category=category, brand=brand,
+                             family=family, category_std=category_std,
+                             q=q, priced=priced, has_image=has_image, min_price=min_price,
+                             max_price=max_price, publish_ready=publish_ready,
+                             order=order, desc=desc, limit=limit, offset=offset)
 
     @app.get("/api/catalog")
     def api_catalog(
@@ -155,39 +167,35 @@ def create_app(state_provider) -> FastAPI:
         ``collapse=true`` returns one card per design (variants grouped, with a
         price band + variant count) instead of one row per SKU.
         """
-        s = S()
-        with lock:
-            if collapse:
-                return list_designs(s["conn"], supplier=supplier, family=family,
-                                    category_std=category_std, q=q, min_price=min_price,
-                                    max_price=max_price, publish_ready=True,
-                                    limit=limit, offset=offset)
-            return list_products(s["conn"], supplier=supplier, category=category, brand=brand,
-                                 family=family, category_std=category_std,
-                                 q=q, min_price=min_price, max_price=max_price,
-                                 publish_ready=True, order=order, desc=desc,
-                                 limit=limit, offset=offset)
+        c = rconn()
+        if collapse:
+            return list_designs(c, supplier=supplier, family=family,
+                                category_std=category_std, q=q, min_price=min_price,
+                                max_price=max_price, publish_ready=True,
+                                limit=limit, offset=offset)
+        return list_products(c, supplier=supplier, category=category, brand=brand,
+                             family=family, category_std=category_std,
+                             q=q, min_price=min_price, max_price=max_price,
+                             publish_ready=True, order=order, desc=desc,
+                             limit=limit, offset=offset)
 
     @app.get("/api/taxonomy")
     def api_taxonomy() -> dict:
         """The canonical tree with live counts — powers faceted browse."""
         from .taxonomy import taxonomy_tree
-        s = S()
-        with lock:
-            tree = taxonomy_tree(s["conn"])
+        tree = taxonomy_tree(rconn())
         return {"families": tree, "family_count": len(tree)}
 
     @app.get("/api/quality")
     def api_quality() -> dict:
         """The trust cockpit: live quality report + scorecard trend."""
         from .quality import metrics_trend, quality_report
-        s = S()
-        with lock:
-            rep = quality_report(s["conn"])
-            rep["trend"] = {
-                "publish_ready": metrics_trend(s["conn"], "publish_ready", 30),
-                "median_completeness": metrics_trend(s["conn"], "median_completeness", 30),
-            }
+        c = rconn()
+        rep = quality_report(c)
+        rep["trend"] = {
+            "publish_ready": metrics_trend(c, "publish_ready", 30),
+            "median_completeness": metrics_trend(c, "median_completeness", 30),
+        }
         return rep
 
     @app.post("/api/event")
@@ -235,41 +243,31 @@ def create_app(state_provider) -> FastAPI:
     def api_demand() -> dict:
         """The demand-side scorecard — zero until there are users, honestly."""
         from . import events
-        s = S()
-        with lock:
-            return events.demand_metrics(s["conn"])
+        return events.demand_metrics(rconn())
 
     @app.get("/api/llm")
     def api_llm() -> dict:
         """LLM-ops cockpit: spend (today/window/all-time), per-model + per-status,
         verifier pass-rate, daily series — every ₹ derived from actual tokens."""
         from . import llm_accounting as acct
-        s = S()
-        with lock:
-            return acct.llm_report(s["conn"])
+        return acct.llm_report(rconn())
 
     @app.get("/api/llm/calls")
     def api_llm_calls(limit: int = Query(50, ge=1, le=500), offset: int = Query(0, ge=0),
                       status: str | None = None) -> dict:
         """The raw ledger — every call, newest first (product, tokens, ₹, status)."""
         from . import llm_accounting as acct
-        s = S()
-        with lock:
-            return acct.recent_calls(s["conn"], limit=limit, offset=offset, status=status)
+        return acct.recent_calls(rconn(), limit=limit, offset=offset, status=status)
 
     @app.get("/api/suppliers")
     def api_suppliers() -> dict:
-        s = S()
-        with lock:
-            sup = list_suppliers(s["conn"])
+        sup = list_suppliers(rconn())
         return {"count": len(sup), "suppliers": sup}
 
     @app.get("/api/supplier/{domain}")
     def api_supplier(domain: str) -> dict:
         """Procurement profile: who they are, how to reach them, where to buy."""
-        s = S()
-        with lock:
-            d = supplier_detail(s["conn"], domain)
+        d = supplier_detail(rconn(), domain)
         if d is None:
             raise HTTPException(404, "supplier not found")
         return d
@@ -277,19 +275,18 @@ def create_app(state_provider) -> FastAPI:
     @app.get("/api/product/{pid}")
     def api_product(pid: int) -> dict:
         from .resolve import variants_of
-        s = S()
-        with lock:
-            row = s["conn"].execute("SELECT * FROM products WHERE id=?", (pid,)).fetchone()
-            if row is None:
-                raise HTTPException(404, "product not found")
-            obs = [dict(o) for o in s["conn"].execute(
-                "SELECT price_inr, price_unit, basis, observed_at, source, source_url "
-                "FROM price_observation WHERE product_id=? ORDER BY observed_at DESC", (pid,))]
-            similar = _similar(s, pid)
-            variants = variants_of(s["conn"], pid)
-            product = dict(row)
-            supplier = supplier_detail(s["conn"], row["supplier_domain"], with_dealers=False)
-        product["price"] = freshest_price(s["conn"], pid)
+        c = rconn()
+        row = c.execute("SELECT * FROM products WHERE id=?", (pid,)).fetchone()
+        if row is None:
+            raise HTTPException(404, "product not found")
+        obs = [dict(o) for o in c.execute(
+            "SELECT price_inr, price_unit, basis, observed_at, source, source_url "
+            "FROM price_observation WHERE product_id=? ORDER BY observed_at DESC", (pid,))]
+        similar = _similar(c, S(), pid)
+        variants = variants_of(c, pid)
+        product = dict(row)
+        supplier = supplier_detail(c, row["supplier_domain"], with_dealers=False)
+        product["price"] = freshest_price(c, pid)
         return {"product": product, "observations": obs, "variants": variants,
                 "supplier": supplier, "similar": similar}
 
@@ -307,11 +304,11 @@ def create_app(state_provider) -> FastAPI:
         return Response(content=jpeg, media_type="image/jpeg",
                         headers={"Cache-Control": "public, max-age=604800"})
 
-    def _similar(s: dict, pid: int) -> list[dict]:
-        store: NumpyVectorStore = s["store"]
+    def _similar(c, s: dict, pid: int) -> list[dict]:
+        store: NumpyVectorStore = s["store"]      # preloaded numpy arrays: read-only, thread-safe
         # prefer visual back-match if we have an image vector, else text
         for kind in ("image", "text"):
-            row = s["conn"].execute(
+            row = c.execute(
                 "SELECT vector FROM embeddings WHERE product_id=? AND kind=?", (pid, kind)).fetchone()
             if row is None:
                 continue
@@ -320,7 +317,7 @@ def create_app(state_provider) -> FastAPI:
             for sid, score in store.search(vec, kind=kind, k=7):
                 if sid == pid:
                     continue
-                p = s["conn"].execute(
+                p = c.execute(
                     "SELECT id, title, image_url, supplier_domain FROM products WHERE id=?",
                     (sid,)).fetchone()
                 if p:
@@ -338,15 +335,25 @@ def default_state_provider() -> dict:
     from .embeddings import MarqoEmbedder
 
     conn = db.connect(check_same_thread=False)
-    db.migrate(conn)   # api may boot before any worker after a deploy — own the schema
+    try:
+        db.migrate(conn)   # api may boot before any worker after a deploy — own the schema
+    except sqlite3.OperationalError:
+        # ...but a locked migrate (a worker mid-write) must NEVER brick serving: the
+        # schema is then already owned by that writer. Skip and serve reads.
+        pass
     store = NumpyVectorStore(conn)
     store.preload("text")
     store.preload("image")
     embedder = MarqoEmbedder()
     embedder.encode_text(["warmup"])  # load model weights before first request
+    # conn_factory gives each request thread its own reader so WAL SQLite serves many
+    # consumers concurrently (no global lock on the read path). connect_reader skips the
+    # journal_mode pragma (which needs a write lock and would block behind the probe/
+    # harvest/enrich writers) and is query_only (can't corrupt the catalog).
+    conn_factory = db.connect_reader  # noqa: E731
     # Serving uses a short fetch timeout: a dead/slow origin fails fast (and gets
     # its .miss memo) instead of pinning a dashboard image lane for 20s.
-    return {"conn": conn, "store": store, "embedder": embedder,
+    return {"conn": conn, "conn_factory": conn_factory, "store": store, "embedder": embedder,
             "prepare_image": functools.partial(
                 image_prep.prepare_image, fetch=image_prep.make_fetch(6.0))}
 

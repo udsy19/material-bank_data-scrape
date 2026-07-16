@@ -202,7 +202,8 @@ def run_canary(db_path, *, model=MODEL, n=400, prepare=None,
     results = _wait(tp, tp.submit(reqs))
     for res in results:                                        # ledger the spend (recon seed)
         u = res.get("usage") or {}
-        acct.log_call(conn, product_id=res.get("key"), model=model, phase="canary", attempt=0,
+        acct.log_call(conn, product_id=res.get("key"),
+                      model=res.get("model_version") or model, phase="canary", attempt=0,
                       input_tokens=u.get("input_tokens", 0), output_tokens=u.get("output_tokens", 0),
                       status="enriched" if res.get("text") else "api_error",
                       batch=True, prompt_version=PROMPT_VERSION)

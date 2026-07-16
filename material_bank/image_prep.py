@@ -19,6 +19,14 @@ from pathlib import Path
 from PIL import Image
 
 MAX_DIM = 384
+# Hard source-size ceiling. Above this we SKIP the image (return None -> text-only
+# enrichment) rather than decode it: an 83MP source decodes to ~250MB of raw RGB,
+# and 8 parallel prep workers each holding one OOM-killed the drain on the 8GB box.
+# 24MP is still generous for a 384px thumbnail (6000×4000); anything larger is a
+# scan/bomb not worth the RAM (non-JPEG can't be draft-downscaled, so it decodes in
+# full). PIL's own limit stays as a backstop for the absurd.
+MAX_SRC_PIXELS = 24_000_000
+Image.MAX_IMAGE_PIXELS = 64_000_000
 _CACHE = Path(__file__).resolve().parent.parent / "data" / "img_cache"
 
 
@@ -42,9 +50,18 @@ _default_fetch = make_fetch()
 
 
 def _resize(raw: bytes) -> bytes | None:
-    """Resize to fit MAX_DIM (both dims ≤384) and re-encode JPEG. None if not an image."""
+    """Resize to fit MAX_DIM (both dims ≤384) and re-encode JPEG. None if not an image.
+
+    draft() BEFORE decode is load-bearing: it tells the JPEG decoder to emit at a
+    reduced DCT scale (½, ¼, ⅛), so a 6000×4000 source never fully materialises as
+    ~72 MB of raw RGB. Without it, 24 parallel prep workers each held a full-size
+    decode and OOM-killed the drain on the 8 GB box (marqo already resident)."""
     try:
-        im = Image.open(io.BytesIO(raw)).convert("RGB")
+        im = Image.open(io.BytesIO(raw))
+        if (im.width or 0) * (im.height or 0) > MAX_SRC_PIXELS:
+            return None                            # pathological source: skip -> text-only
+        im.draft("RGB", (MAX_DIM, MAX_DIM))        # cheap on JPEG, a no-op otherwise
+        im = im.convert("RGB")
     except Exception:
         return None
     im.thumbnail((MAX_DIM, MAX_DIM))

@@ -23,25 +23,48 @@ def _now() -> datetime:
     return datetime.now(timezone.utc)
 
 
+def _locked_retry(conn, fn, *, tries: int = 6):
+    """Run a write closure, retrying on 'database is locked'. The queue is written by
+    many concurrent harvest/embed workers at once; busy_timeout can't clear a WAL
+    snapshot deadlock (it returns SQLITE_BUSY immediately) — only rollback + a fresh
+    attempt can. Without this, jobs.fail()/retry_dead() etc. crash a whole harvest run
+    under write contention. ``fn`` must be idempotent under rollback (it re-runs clean)."""
+    import time
+    for attempt in range(tries):
+        try:
+            return fn()
+        except sqlite3.OperationalError as e:
+            if "locked" not in str(e).lower() or attempt == tries - 1:
+                raise
+            try:
+                conn.rollback()
+            except sqlite3.OperationalError:
+                pass
+            time.sleep(0.2 * (attempt + 1))
+
+
 def enqueue(conn: sqlite3.Connection, stage: str, target: str, *,
             priority: int = 0, max_attempts: int = 4, reset: bool = False) -> None:
     """Add a job (idempotent per stage+target). ``reset`` re-arms a done/failed
     job back to pending for a fresh attempt cycle."""
     ts = now_iso()
-    if reset:
-        conn.execute(
-            "INSERT INTO pipeline_jobs (stage,target,status,attempts,max_attempts,priority,"
-            "next_run_at,created_at,updated_at) VALUES (?,?,'pending',0,?,?,?,?,?) "
-            "ON CONFLICT(stage,target) DO UPDATE SET status='pending', attempts=0, "
-            "last_error=NULL, next_run_at=excluded.next_run_at, max_attempts=excluded.max_attempts, "
-            "priority=excluded.priority, updated_at=excluded.updated_at",
-            (stage, target, max_attempts, priority, ts, ts, ts))
-    else:
-        conn.execute(
-            "INSERT OR IGNORE INTO pipeline_jobs (stage,target,status,attempts,max_attempts,"
-            "priority,next_run_at,created_at,updated_at) VALUES (?,?,'pending',0,?,?,?,?,?)",
-            (stage, target, max_attempts, priority, ts, ts, ts))
-    conn.commit()
+
+    def _w():
+        if reset:
+            conn.execute(
+                "INSERT INTO pipeline_jobs (stage,target,status,attempts,max_attempts,priority,"
+                "next_run_at,created_at,updated_at) VALUES (?,?,'pending',0,?,?,?,?,?) "
+                "ON CONFLICT(stage,target) DO UPDATE SET status='pending', attempts=0, "
+                "last_error=NULL, next_run_at=excluded.next_run_at, max_attempts=excluded.max_attempts, "
+                "priority=excluded.priority, updated_at=excluded.updated_at",
+                (stage, target, max_attempts, priority, ts, ts, ts))
+        else:
+            conn.execute(
+                "INSERT OR IGNORE INTO pipeline_jobs (stage,target,status,attempts,max_attempts,"
+                "priority,next_run_at,created_at,updated_at) VALUES (?,?,'pending',0,?,?,?,?,?)",
+                (stage, target, max_attempts, priority, ts, ts, ts))
+        conn.commit()
+    _locked_retry(conn, _w)
 
 
 def enqueue_many(conn, stage, targets, *, reset=False, **kw) -> int:
@@ -53,38 +76,49 @@ def enqueue_many(conn, stage, targets, *, reset=False, **kw) -> int:
 def requeue_stale_running(conn: sqlite3.Connection, *, now: datetime | None = None) -> int:
     """Reclaim jobs stuck 'running' past the stale window (worker crashed)."""
     cutoff = ((now or _now()) - timedelta(seconds=STALE_RUNNING_S)).isoformat()
-    cur = conn.execute(
-        "UPDATE pipeline_jobs SET status='pending', updated_at=? "
-        "WHERE status='running' AND updated_at < ?", (now_iso(), cutoff))
-    conn.commit()
-    return cur.rowcount
+
+    def _w():
+        cur = conn.execute(
+            "UPDATE pipeline_jobs SET status='pending', updated_at=? "
+            "WHERE status='running' AND updated_at < ?", (now_iso(), cutoff))
+        conn.commit()
+        return cur.rowcount
+    return _locked_retry(conn, _w)
 
 
 def claim(conn: sqlite3.Connection, stage: str, *, now: datetime | None = None) -> sqlite3.Row | None:
     """Atomically claim one eligible pending job, or None. Safe under concurrency:
     two workers may read the same id, but only one UPDATE flips it to running."""
     now_s = (now or _now()).isoformat()
-    for _ in range(8):  # brief contention retries
+
+    def _claim_once():
         row = conn.execute(
             "SELECT id FROM pipeline_jobs WHERE stage=? AND status='pending' "
             "AND (next_run_at IS NULL OR next_run_at <= ?) ORDER BY priority DESC, id LIMIT 1",
             (stage, now_s)).fetchone()
         if row is None:
-            return None
+            return None, False
         cur = conn.execute(
             "UPDATE pipeline_jobs SET status='running', updated_at=? WHERE id=? AND status='pending'",
             (now_iso(), row[0]))
         conn.commit()
         if cur.rowcount == 1:
-            return conn.execute("SELECT * FROM pipeline_jobs WHERE id=?", (row[0],)).fetchone()
+            return conn.execute("SELECT * FROM pipeline_jobs WHERE id=?", (row[0],)).fetchone(), True
+        return None, True                      # lost the race to another worker — retry
+    for _ in range(8):  # brief contention retries (another worker won, or a transient lock)
+        job, retry = _locked_retry(conn, _claim_once)
+        if not retry or job is not None:
+            return job
     return None
 
 
 def complete(conn: sqlite3.Connection, job_id: int, result: dict | None = None) -> None:
-    conn.execute(
-        "UPDATE pipeline_jobs SET status='done', result=?, last_error=NULL, updated_at=? WHERE id=?",
-        (json.dumps(result or {}), now_iso(), job_id))
-    conn.commit()
+    def _w():
+        conn.execute(
+            "UPDATE pipeline_jobs SET status='done', result=?, last_error=NULL, updated_at=? WHERE id=?",
+            (json.dumps(result or {}), now_iso(), job_id))
+        conn.commit()
+    _locked_retry(conn, _w)
 
 
 def fail(conn: sqlite3.Connection, job_id: int, error: str, *,
@@ -92,21 +126,23 @@ def fail(conn: sqlite3.Connection, job_id: int, error: str, *,
          now: datetime | None = None) -> str:
     """Record a failure. Reschedules with exponential backoff, or dead-letters
     to 'failed' once attempts are exhausted. Returns the new status."""
-    row = conn.execute("SELECT attempts, max_attempts FROM pipeline_jobs WHERE id=?",
-                       (job_id,)).fetchone()
-    attempts = (row["attempts"] if row else 0) + 1
-    max_attempts = row["max_attempts"] if row else 1
-    if attempts >= max_attempts:
-        status, next_run = "failed", None
-    else:
-        delay = min(base * (2 ** (attempts - 1)), cap)
-        status = "pending"
-        next_run = ((now or _now()) + timedelta(seconds=delay)).isoformat()
-    conn.execute(
-        "UPDATE pipeline_jobs SET status=?, attempts=?, last_error=?, next_run_at=?, updated_at=? "
-        "WHERE id=?", (status, attempts, (error or "")[:2000], next_run, now_iso(), job_id))
-    conn.commit()
-    return status
+    def _w():
+        row = conn.execute("SELECT attempts, max_attempts FROM pipeline_jobs WHERE id=?",
+                           (job_id,)).fetchone()
+        attempts = (row["attempts"] if row else 0) + 1
+        max_attempts = row["max_attempts"] if row else 1
+        if attempts >= max_attempts:
+            status, next_run = "failed", None
+        else:
+            delay = min(base * (2 ** (attempts - 1)), cap)
+            status = "pending"
+            next_run = ((now or _now()) + timedelta(seconds=delay)).isoformat()
+        conn.execute(
+            "UPDATE pipeline_jobs SET status=?, attempts=?, last_error=?, next_run_at=?, updated_at=? "
+            "WHERE id=?", (status, attempts, (error or "")[:2000], next_run, now_iso(), job_id))
+        conn.commit()
+        return status
+    return _locked_retry(conn, _w)
 
 
 def enqueue_due_refreshes(conn: sqlite3.Connection, *, fast_days: float = 1,
@@ -148,9 +184,12 @@ def retry_dead(conn: sqlite3.Connection, stage: str | None = None) -> int:
     if stage:
         q += " AND stage=?"
         params.append(stage)
-    cur = conn.execute(q, params)
-    conn.commit()
-    return cur.rowcount
+
+    def _w():
+        cur = conn.execute(q, params)
+        conn.commit()
+        return cur.rowcount
+    return _locked_retry(conn, _w)
 
 
 def counts(conn: sqlite3.Connection, stage: str | None = None) -> dict:

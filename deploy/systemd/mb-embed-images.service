@@ -1,0 +1,26 @@
+[Unit]
+Description=Material Bank — image-embedding backfill (245k images, resumable)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=__APP_USER__
+WorkingDirectory=__APP_DIR__
+EnvironmentFile=-__APP_DIR__/.env
+ExecStart=__APP_DIR__/.venv/bin/python -m material_bank.harvest.images
+# Resumable by construction (skips products already image-embedded), so a
+# restart costs at most one WRITE_BATCH of re-work rather than starting over.
+Restart=on-failure
+RestartSec=30
+# Niced BELOW the text embedder (5): this is a one-off backfill and must yield
+# to the API and the harvesters. On 2 cores that matters — it is the difference
+# between a slow backfill and a slow website.
+Nice=15
+# Cap it so a leak can never OOM the box again (measured peak ~1.2G).
+MemoryMax=2G
+StandardOutput=append:__APP_DIR__/reports/mb-embed-images.log
+StandardError=append:__APP_DIR__/reports/mb-embed-images.log
+
+[Install]
+WantedBy=multi-user.target
