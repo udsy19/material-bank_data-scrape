@@ -87,14 +87,28 @@ _QUEUE_DEPTH = 32
 # Kept above 224 so the model's own resize/crop still has pixels to work with.
 _MAX_EDGE = 336
 
-# store.upsert() commits per call — one fsync per image. catalog.db is written
-# concurrently by the harvesters (see db.run_locked), so each of those commits
-# also queues behind the write lock; measured, that alone dragged the backfill
-# to ~16s/image, five times slower than the model. upsert_many() takes one
-# commit per batch, so writes stop being the bottleneck at 245k rows.
-# Kept larger than EMBED_BATCH: encoding wants small batches (cache), writing
-# wants big ones (fsync amortization). They are different problems.
-WRITE_BATCH = 128
+# _MAX_EDGE caps what crosses the queue, but the DECODE itself happens at
+# native resolution first — and some supplier uploads are print masters
+# (observed: 167 megapixels = ~500MB as one RGB bitmap, doubled by
+# .convert()). One of those blows the unit's MemoryMax and the OOM SIGKILL
+# lands before the write buffer flushes, so the resume re-fetches the same
+# rows and dies on the same image: a crash loop with zero durable progress.
+# Cap the decode: JPEGs above the cap are decoded via draft() at reduced
+# scale (cheap, in-place); anything still over the cap after draft (PNG has
+# no draft mode) is quarantined instead of decoded.
+_MAX_DECODE_PIXELS = 40_000_000  # product photos are <25MP; only print masters exceed this
+
+
+def _open_capped(Image, data: bytes):
+    """Open + convert an image without ever fully decoding a giant."""
+    img = Image.open(io.BytesIO(data))
+    w, h = img.size
+    if w * h > _MAX_DECODE_PIXELS:
+        img.draft("RGB", (_MAX_EDGE, _MAX_EDGE))
+        dw, dh = img.size
+        if dw * dh > _MAX_DECODE_PIXELS:
+            raise ValueError(f"image too large to decode safely: {w}x{h}")
+    return img.convert("RGB")
 
 
 def _is_cdn(url: str) -> bool:
@@ -154,8 +168,15 @@ def embed_images(
     pdp_fetcher = pdp_fetcher or Fetcher()
 
     done = set() if force else store.embedded_ids("image")
+    # Quarantine is sticky: a URL that already failed (403 host, undecodable
+    # image) is not retried on every restart — without this, each resume
+    # re-fetched and re-quarantined the same failures (22k duplicate rows for
+    # one 403ing host). ``force=True`` clears both skips.
+    bad_urls = set() if force else {
+        r["source_url"] for r in conn.execute(
+            "SELECT DISTINCT source_url FROM quarantine WHERE stage='image'")}
     rows = [r for r in conn.execute("SELECT id, image_url FROM products ORDER BY id")
-            if r["id"] not in done]
+            if r["id"] not in done and r["image_url"] not in bad_urls]
     if limit is not None:
         rows = rows[:limit]
 
@@ -186,7 +207,7 @@ def _embed_serial(conn, embedder, store, rows, stats, pdp_fetcher, image_fetcher
             stats["quarantined"] += 1
             continue
         try:
-            img = Image.open(io.BytesIO(resp.content)).convert("RGB")
+            img = _open_capped(Image, resp.content)
             vec = embedder.encode_image([img])[0]
         except Exception as exc:
             db.quarantine(conn, stage="image", source_url=url,
@@ -246,7 +267,7 @@ def _embed_concurrent(conn, embedder, store, rows, stats, pdp_fetcher,
                     out.put((row["id"], url, None,
                              f"image fetch {resp.status_code or resp.error}"))
                     continue
-                img = Image.open(io.BytesIO(resp.content)).convert("RGB")
+                img = _open_capped(Image, resp.content)
                 # Shrink before queueing — see _MAX_EDGE. thumbnail() is
                 # in-place, keeps aspect, and never upscales.
                 img.thumbnail((_MAX_EDGE, _MAX_EDGE), Image.BILINEAR)
@@ -267,8 +288,13 @@ def _embed_concurrent(conn, embedder, store, rows, stats, pdp_fetcher,
     write_buf: list = []    # (pid, vector) awaiting a batched write
     finished = 0
 
-    def drain_writes(force: bool = False):
-        if not write_buf or (not force and len(write_buf) < WRITE_BATCH):
+    def drain_writes():
+        # One commit per encode batch: still amortizes the fsync (vs the
+        # per-image upsert that measured 16s/image under harvester write-lock
+        # contention), but keeps progress durable — the old 128-image buffer
+        # lost everything whenever the OOM killer struck before the first
+        # drain, turning every crash into a full replay of the same rows.
+        if not write_buf:
             return
         store.upsert_many(write_buf, kind="image", model=embedder.model_id)
         write_buf.clear()
@@ -316,7 +342,7 @@ def _embed_concurrent(conn, embedder, store, rows, stats, pdp_fetcher,
         if len(pending) >= batch_size:
             flush()
     flush()
-    drain_writes(force=True)
+    drain_writes()
 
     # The stragglers with no image_url — serial, because resolving one writes.
     if need_resolve:

@@ -17,8 +17,8 @@ RestartSec=30
 # to the API and the harvesters. On 2 cores that matters — it is the difference
 # between a slow backfill and a slow website.
 Nice=15
-# Cap it so a leak can never OOM the box again (measured peak ~1.2G).
-MemoryMax=2G
+# Cap it so a leak can never OOM the box again (steady state measured ~1.9G — 2G left no headroom for decode spikes).
+MemoryMax=2560M
 StandardOutput=append:__APP_DIR__/reports/mb-embed-images.log
 StandardError=append:__APP_DIR__/reports/mb-embed-images.log
 
